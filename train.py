@@ -15,7 +15,7 @@ sys.path.append('submodules')
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config
 from graf.utils import get_zdist
-from graf.train_step import compute_grad2, compute_loss, save_data
+from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg
 from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
@@ -102,7 +102,7 @@ def main():
     wandb.init(
         project="graf250311",
         entity="vicky20020808",
-        name="RS315 select",
+        name="RS307 wgan",
         config=config
     )
     
@@ -145,11 +145,12 @@ def main():
 
             d_real = discriminator(rgbs, label)
             dloss_real = compute_loss(d_real, 1)
-            reg = 10. * compute_grad2(d_real, rgbs).mean()
+            # reg = 10. * compute_grad2(d_real, rgbs).mean()
             
 
             d_fake = discriminator(x_fake, label)
             dloss_fake = compute_loss(d_fake, 0)
+            reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
 
             dloss = dloss_real + dloss_fake
             dloss_all = dloss_real + dloss_fake +reg
