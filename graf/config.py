@@ -91,8 +91,8 @@ def build_models(config, disc=True):
 
     H, W, f, r = config['data']['hwfr']
 
-    # initial_direction = [1.0, 0.0, 0.0]
-    # initial_direction = torch.tensor(initial_direction, dtype=torch.float32)
+    # 檢查是否啟用 ViT
+    use_vit = config.get('vit', {}).get('enabled', False)
 
     generator = Generator(H, W, f, r,
                           ray_sampler=ray_sampler,
@@ -103,9 +103,18 @@ def build_models(config, disc=True):
                           range_v=(float(config['data']['vmin']), float(config['data']['vmax'])),
                           orthographic=config['data']['orthographic'],
                           v=config['data']['v'],
-                          use_default_rays=config['data']['use_default_rays']
-                        #   initial_direction=initial_direction
+                          use_default_rays=config['data']['use_default_rays'],
+                          use_vit=use_vit
                           )
+    
+    # 如果啟用 ViT，應用其他配置
+    if use_vit and hasattr(generator, 'view_transformer'):
+        # 應用 ViT 配置
+        vit_config = config.get('vit', {})
+        if 'img_size' in vit_config:
+            generator.view_transformer.patch_embed.img_size = vit_config['img_size']
+        if 'patch_size' in vit_config:
+            generator.view_transformer.patch_embed.patch_size = vit_config['patch_size']
 
     discriminator = None
     if disc:

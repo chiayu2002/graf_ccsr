@@ -17,6 +17,7 @@ from graf.config import get_data, build_models, load_config, save_config
 from graf.utils import get_zdist, visualize_coordinate_system
 from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg
 from graf.transforms import ImgToPatch
+from graf.models.vit_model import ViewConsistencyTransformer
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
@@ -86,6 +87,7 @@ def main():
     # 初始化model
     train_loader, generator, discriminator = initialize_training(config, device)
 
+    # 初始化世界座標系統
     canonical_poses = generator.initialize_world_coordinates()
     canonical_pose_path = os.path.join(out_dir, 'canonical_poses.pt')
     torch.save(canonical_poses, canonical_pose_path)
@@ -93,6 +95,12 @@ def main():
     
     coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
     print(f"座標系統可視化已保存到 {coordinate_viz_path}")
+
+    # 如果啟用了 ViT，預訓練視角變換器
+    if hasattr(generator, 'use_vit') and generator.use_vit:
+        print("開始預訓練視角一致性模型...")
+        # 可以創建一個專用於預訓練的數據加載器，或者使用現有的
+        generator.pretrain_view_transformer(train_loader, epochs=5)
 
     # 優化器
     lr_g = config['training']['lr_g']
@@ -148,6 +156,12 @@ def main():
             rgbs = img_to_patch(x_real)
             rgbs.requires_grad_(True)
 
+            # 如果使用 ViT，先更新緩存的視圖
+            if hasattr(generator, 'use_vit') and generator.use_vit:
+                # 將真實圖像轉換為合適的格式
+                real_views = rgbs.to(device)
+                generator.update_cached_views(real_views)
+
             z = zdist.sample((batch_size,))
             x_fake, rays = generator(z, label)
 
@@ -175,7 +189,36 @@ def main():
             x_fake, rays= generator(z, label)
             d_fake = discriminator(x_fake, label)
 
-            gloss = compute_loss(d_fake, 1) 
+            gloss_disc = compute_loss(d_fake, 1) 
+
+            # 添加視角一致性損失
+            gloss_view = 0
+            if hasattr(generator, 'use_vit') and generator.use_vit:
+                # 將生成的圖像添加到緩存
+                fake_views = x_fake.view(batch_size, 32, 32, 3).permute(0, 3, 1, 2)
+                
+                # 獲取角度標籤
+                h_angles = label[:, 2].float() / 360.0  # 水平角度，規範化到 0-1
+                
+                # 假設垂直角度在標籤的第四列，否則使用默認值
+                if label.shape[1] > 3:
+                    v_angles = label[:, 3].float()  # 假設已經在 0-0.5 範圍內
+                else:
+                    v_angles = torch.ones_like(h_angles) * 0.25  # 默認垂直角度
+                
+                # 組合為目標角度張量
+                target_angles = torch.stack([h_angles, v_angles], dim=1).to(device)
+                
+                # 預測角度
+                pred_angles = generator.view_transformer(fake_views)
+                
+                # 計算視角一致性損失
+                gloss_view = F.mse_loss(pred_angles, target_angles)
+                
+                # 添加到總損失，使用權重係數
+                gloss = gloss_disc + 0.1 * gloss_view
+            else:
+                gloss = gloss_disc
 
             gloss.backward()
             g_optimizer.step()
@@ -184,7 +227,8 @@ def main():
             if (it + 1) % config['training']['print_every'] == 0:
                 wandb.log({
                     "loss/discriminator": dloss,
-                    "loss/generator": gloss,
+                    "loss/generator": gloss_disc,
+                    "loss/view_consistency": gloss_view if hasattr(generator, 'use_vit') and generator.use_vit else 0,
                     "loss/regularizer": reg,
                     "iteration": it
                 })
@@ -213,6 +257,20 @@ def main():
                 ptest = torch.stack(plist)
 
                 rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
+
+                # 添加視角一致性可視化
+                if hasattr(generator, 'use_vit') and generator.use_vit and generator.cached_views is not None:
+                    # 獲取當前的預測角度
+                    with torch.no_grad():
+                        pred_angles = generator.view_transformer(generator.cached_views)
+                    
+                    # 記錄預測的角度
+                    for i in range(min(batch_size, 4)):  # 最多記錄4個樣本
+                        wandb.log({
+                            f"angles/sample_{i}_h": pred_angles[i, 0].item(),
+                            f"angles/sample_{i}_v": pred_angles[i, 1].item(),
+                            "iteration": it
+                        })
 
                 coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it)
                     
