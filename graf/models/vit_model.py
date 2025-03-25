@@ -5,7 +5,7 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 class PatchEmbed(nn.Module):
     """將圖像分成固定大小的補丁並線性嵌入"""
-    def __init__(self, img_size=32, patch_size=4, in_chans=3, embed_dim=256):
+    def __init__(self, img_size=32, patch_size=8, in_chans=3, embed_dim=256):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -26,7 +26,7 @@ class PatchEmbed(nn.Module):
 
 class ViewConsistencyTransformer(nn.Module):
     """基於 ViT 的視角一致性模型 - 同時預測水平和垂直角度"""
-    def __init__(self, img_size=32, patch_size=4, in_chans=3, embed_dim=256, 
+    def __init__(self, img_size=32, patch_size=8, in_chans=3, embed_dim=256, 
                  num_heads=8, num_layers=6, mlp_ratio=4):
         super().__init__()
         

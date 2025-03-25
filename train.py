@@ -96,12 +96,6 @@ def main():
     coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
     print(f"座標系統可視化已保存到 {coordinate_viz_path}")
 
-    # 如果啟用了 ViT，預訓練視角變換器
-    if hasattr(generator, 'use_vit') and generator.use_vit:
-        print("開始預訓練視角一致性模型...")
-        # 可以創建一個專用於預訓練的數據加載器，或者使用現有的
-        generator.pretrain_view_transformer(train_loader, epochs=5)
-
     # 優化器
     lr_g = config['training']['lr_g']
     lr_d = config['training']['lr_d']
@@ -121,6 +115,12 @@ def main():
         name="RS615",
         config=config
     )
+
+    # 如果啟用了 ViT，預訓練視角變換器
+    if hasattr(generator, 'use_vit') and generator.use_vit:
+        print("開始預訓練視角一致性模型...")
+        # 可以創建一個專用於預訓練的數據加載器，或者使用現有的
+        generator.pretrain_view_transformer(train_loader, epochs=5)
     
     # 設置檢查點
     checkpoint_io = CheckpointIO(checkpoint_dir=checkpoint_dir)
@@ -200,11 +200,21 @@ def main():
                 # 獲取角度標籤
                 h_angles = label[:, 2].float() / 360.0  # 水平角度，規範化到 0-1
                 
-                # 假設垂直角度在標籤的第四列，否則使用默認值
-                if label.shape[1] > 3:
-                    v_angles = label[:, 3].float()  # 假設已經在 0-0.5 範圍內
-                else:
-                    v_angles = torch.ones_like(h_angles) * 0.25  # 默認垂直角度
+                # 根据 label[:,1] 的值选择对应的垂直角度
+                v_angles = torch.zeros_like(h_angles)
+                
+                # 垂直角度映射表
+                v_angle_map = {
+                    0: 0.5,
+                    1: 0.4166667,
+                    2: 0.3333334,
+                    3: 0.25,
+                    4: 0.1666667
+                }
+                
+                # 根据标签设置垂直角度
+                for i, v_idx in enumerate(label[:, 1].long()):
+                    v_angles[i] = v_angle_map.get(v_idx.item(), 0.25)
                 
                 # 組合為目標角度張量
                 target_angles = torch.stack([h_angles, v_angles], dim=1).to(device)
@@ -265,7 +275,7 @@ def main():
                         pred_angles = generator.view_transformer(generator.cached_views)
                     
                     # 記錄預測的角度
-                    for i in range(min(batch_size, 4)):  # 最多記錄4個樣本
+                    for i in range(batch_size):  # 最多記錄4個樣本
                         wandb.log({
                             f"angles/sample_{i}_h": pred_angles[i, 0].item(),
                             f"angles/sample_{i}_v": pred_angles[i, 1].item(),
