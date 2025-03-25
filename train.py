@@ -20,7 +20,7 @@ from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 def setup_directories(config):
     out_dir = os.path.join(config['training']['outdir'], config['expname'])
@@ -102,7 +102,7 @@ def main():
     wandb.init(
         project="graf250311",
         entity="vicky20020808",
-        name="RS307 wgan",
+        name="RS315 +0.67",
         config=config
     )
     
@@ -145,12 +145,12 @@ def main():
 
             d_real = discriminator(rgbs, label)
             dloss_real = compute_loss(d_real, 1)
-            # reg = 10. * compute_grad2(d_real, rgbs).mean()
+            reg = 10. * compute_grad2(d_real, rgbs).mean()
             
 
             d_fake = discriminator(x_fake, label)
             dloss_fake = compute_loss(d_fake, 0)
-            reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
+            # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
 
             dloss = dloss_real + dloss_fake
             dloss_all = dloss_real + dloss_fake +reg
@@ -191,7 +191,7 @@ def main():
                 # is_training = generator.use_test_kwargs
                 # generator.eval()  
                 plist = []
-                angle_positions = [(i/8, 0.5) for i in range(8)] 
+                angle_positions = [(i/8+0.67, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))
                 label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
 
