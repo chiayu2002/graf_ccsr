@@ -131,59 +131,49 @@ class Generator(object):
         
         return RT
     
-    # def fixed_world_coordinate_system(self, u, v, radius=1.0):
-    #     """
-    #     創建一個固定的世界座標系統，其中 X 軸正方向對應0度
+    def get_canonical_poses(self):
+        """
+        返回固定世界座標上的一組標準相機姿勢。
+        這些作為世界座標系統的參考點。
         
-    #     參數:
-    #         u: 水平參數 (0-1)，對應 0-360 度，0 表示正X軸方向
-    #         v: 垂直參數 (0-1)，控制與 XY 平面的夾角
-    #         radius: 相機距離原點的距離
-    #     """
-    #     # 將角度轉換為弧度 (u=0 表示0度，u=0.5表示180度，u=1表示360度)
-    #     theta = 2 * np.pi * u
-    #     phi = np.arccos(1 - 2 * v)
+        返回：
+            標準姿勢的字典
+        """
+        canonical_poses = {
+            "front": self.sample_select_pose(0.0, 0.5),    # 0°（前）
+            "right": self.sample_select_pose(0.25, 0.5),   # 90°（右）
+            "back": self.sample_select_pose(0.5, 0.5),     # 180°（後）
+            "left": self.sample_select_pose(0.75, 0.5),    # 270°（左）
+            "top": self.sample_select_pose(0.0, 0.0),      # 頂視圖
+            "bottom": self.sample_select_pose(0.0, 1.0)    # 底視圖
+        }
+        return canonical_poses
+    
+    def initialize_world_coordinates(self):
+        """
+        初始化並驗證固定的世界座標系統。
+        應該在訓練開始時調用一次。
+        """
+        # 獲取標準視圖
+        canonical_poses = self.get_canonical_poses()
         
-    #     # 計算相機在球面上的位置
-    #     # 當 u=0 時，相機在正X軸方向
-    #     x = radius * np.sin(phi) * np.cos(theta)
-    #     y = radius * np.sin(phi) * np.sin(theta)
-    #     z = radius * np.cos(phi)
+        # 確保原點在 (0,0,0)
+        origin = torch.zeros(3, device=self.device)
         
-    #     # 相機位置
-    #     camera_pos = np.array([x, y, z])
+        # 在場景中創建視覺標記來表示世界軸
+        # 這僅用於調試/可視化目的
+        self.world_axes = {
+            "x": torch.tensor([1.0, 0.0, 0.0], device=self.device),
+            "y": torch.tensor([0.0, 1.0, 0.0], device=self.device),
+            "z": torch.tensor([0.0, 0.0, 1.0], device=self.device)
+        }
         
-    #     # 視線方向 - 從相機指向原點
-    #     view_dir = camera_pos / np.linalg.norm(camera_pos)
+        print("世界座標系統已初始化。")
+        print(f"原點: {origin}")
+        print(f"前視圖位置: {canonical_poses['front'][:3, 3]}")
         
-    #     # 上方向 - 固定為全局 Z 軸
-    #     up = np.array([0, 0, 1])
-        
-    #     # 計算相機坐標系中的 x 軸 (右方向)
-    #     x_axis = np.cross(up, view_dir)
-    #     if np.linalg.norm(x_axis) < 1e-5:
-    #         # 如果相機位於 Z 軸上，使用固定的 X 軸
-    #         if z > 0:  # 在 Z 軸上方
-    #             x_axis = np.array([1, 0, 0])
-    #         else:      # 在 Z 軸下方
-    #             x_axis = np.array([-1, 0, 0])
-    #     else:
-    #         x_axis = x_axis / np.linalg.norm(x_axis)
-        
-    #     # 計算相機坐標系中的 y 軸 (上方向)
-    #     y_axis = np.cross(view_dir, x_axis)
-    #     y_axis = y_axis / np.linalg.norm(y_axis)
-        
-    #     # z 軸是視線方向
-    #     z_axis = view_dir
-        
-    #     # 構建旋轉矩陣
-    #     r_mat = np.stack([x_axis, y_axis, z_axis], axis=1)
-        
-    #     # 構建變換矩陣
-    #     RT = np.concatenate([r_mat, camera_pos.reshape(3, 1)], axis=1)
-        
-    #     return torch.tensor(RT, dtype=torch.float32)
+        return canonical_poses
+
     
     def sample_rays(self):   #設train用的rays
         pose = self.sample_pose()

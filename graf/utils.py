@@ -166,3 +166,46 @@ def look_at(eye, at=np.array([0, 0, 0]), up=np.array([0, 0, 1]), eps=1e-5):   #�
     r_mat = np.concatenate((x_axis.reshape(-1, 3, 1), y_axis.reshape(-1, 3, 1), z_axis.reshape(-1, 3, 1)), axis=2)
 
     return r_mat  #形狀(1,3,3)
+
+def visualize_coordinate_system(generator, out_dir, it):
+    """
+    可視化世界座標系統軸和原點。
+    將可視化保存到文件。
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 原點
+    ax.scatter([0], [0], [0], color='black', s=100, label='原點')
+    
+    # 軸
+    ax.quiver(0, 0, 0, 1, 0, 0, color='red', label='X軸')
+    ax.quiver(0, 0, 0, 0, 1, 0, color='green', label='Y軸')
+    ax.quiver(0, 0, 0, 0, 0, 1, color='blue', label='Z軸')
+    
+    # 相機位置（標準視圖）
+    canonical_poses = generator.get_canonical_poses()
+    for name, pose in canonical_poses.items():
+        pos = pose[:3, 3].cpu().numpy()
+        ax.scatter(pos[0], pos[1], pos[2], label=f'相機: {name}')
+    
+    # 設置視圖限制
+    r = generator.radius if not isinstance(generator.radius, tuple) else 4.0
+    ax.set_xlim([-r, r])
+    ax.set_ylim([-r, r])
+    ax.set_zlim([-r, r])
+    
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.legend()
+    
+    # 保存圖片
+    fig_path = os.path.join(out_dir, f'world_coords_iter_{it}.png')
+    plt.savefig(fig_path)
+    plt.close(fig)
+    
+    return fig_path

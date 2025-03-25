@@ -14,13 +14,13 @@ sys.path.append('submodules')
 
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config
-from graf.utils import get_zdist
+from graf.utils import get_zdist, visualize_coordinate_system
 from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg
 from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
-# os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 def setup_directories(config):
     out_dir = os.path.join(config['training']['outdir'], config['expname'])
@@ -85,7 +85,15 @@ def main():
     
     # 初始化model
     train_loader, generator, discriminator = initialize_training(config, device)
+
+    canonical_poses = generator.initialize_world_coordinates()
+    canonical_pose_path = os.path.join(out_dir, 'canonical_poses.pt')
+    torch.save(canonical_poses, canonical_pose_path)
+    print(f"標準姿勢已保存到 {canonical_pose_path}")
     
+    coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
+    print(f"座標系統可視化已保存到 {coordinate_viz_path}")
+
     # 優化器
     lr_g = config['training']['lr_g']
     lr_d = config['training']['lr_d']
@@ -102,7 +110,7 @@ def main():
     wandb.init(
         project="graf250311",
         entity="vicky20020808",
-        name="RS315 +0.67",
+        name="RS615",
         config=config
     )
     
@@ -191,7 +199,7 @@ def main():
                 # is_training = generator.use_test_kwargs
                 # generator.eval()  
                 plist = []
-                angle_positions = [(i/8+0.67, 0.5) for i in range(8)] 
+                angle_positions = [(i/8, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))
                 label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
 
@@ -204,19 +212,15 @@ def main():
                     plist.append(poses)
                 ptest = torch.stack(plist)
 
-                # poses_array = np.array([p.detach().cpu().numpy() for p in plist])
-                # save_path_np = os.path.join(save_dir, f'poses_iter_{it}.npy')
-                # np.save(save_path_np, poses_array)
-
                 rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
 
-                # if is_training:
-                #     generator.train()
+                coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it)
                     
                 wandb.log({
                     "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
                     "sample/depth": [wandb.Image(depth, caption=f"Depth at iter {it}")],
                     "sample/acc": [wandb.Image(acc, caption=f"Acc at iter {it}")],
+                    "visualization/coordinate_system": wandb.Image(coordinate_viz_path, caption=f"座標系統 {it}"),
                     "epoch_idx": epoch_idx,
                     "iteration": it
                 })
