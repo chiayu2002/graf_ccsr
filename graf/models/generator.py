@@ -93,11 +93,21 @@ class Generator(object):
                 # 獲取角度標籤
                 h_angles = labels[:, 2].float().to(self.device) / 360.0  # 水平角度，規範化到 0-1
                 
-                # 假設垂直角度在標籤的第四列，否則使用默認值 0.5
-                if labels.shape[1] > 3:
-                    v_angles = labels[:, 3].float().to(self.device)  # 假設已經在 0-0.5 範圍內
-                else:
-                    v_angles = torch.ones_like(h_angles) * 0.25  # 默認垂直角度
+                # 根据 label[:,1] 的值选择对应的垂直角度
+                v_angles = torch.zeros_like(h_angles)
+                
+                # 垂直角度映射表
+                v_angle_map = {
+                    0: 0.5,
+                    1: 0.4166667,
+                    2: 0.3333334,
+                    3: 0.25,
+                    4: 0.1666667
+                }
+                
+                # 根据标签设置垂直角度
+                for i, v_idx in enumerate(labels[:, 1].long()):
+                    v_angles[i] = v_angle_map.get(v_idx.item(), 0.25)
                 
                 # 組合為目標角度張量
                 target_angles = torch.stack([h_angles, v_angles], dim=1)
@@ -146,7 +156,8 @@ class Generator(object):
                         selected_u = (selected_u + pred_u) / 2  # 混合原始值和預測值
                         
                         # 使用預測的垂直角度
-                        selected_v = angles[i, 1].item()  # 已在 0-0.5 範圍內
+                        # selected_v = angles[i, 1].item()  # 已在 0-0.5 範圍內
+                        selected_v = v_list[int(second_value)]
                     else:
                         # 使用預設的垂直角度
                         selected_v = v_list[min(int(second_value), len(v_list) - 1)]
