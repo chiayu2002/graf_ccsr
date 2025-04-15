@@ -87,8 +87,15 @@ class NeRF(nn.Module):
         # self.views_linears = nn.ModuleList(
         #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
         
+        # self.condition_embedding = nn.Sequential(
+        #         nn.Embedding(numclasses, W),
+        #         nn.LayerNorm(W)
+        #         )
         self.condition_embedding = nn.Sequential(
                 nn.Embedding(numclasses, W),
+                nn.LayerNorm(W),
+                nn.Linear(W,W),
+                nn.ReLU(), 
                 nn.LayerNorm(W)
                 )
             

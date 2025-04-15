@@ -16,10 +16,9 @@ def compute_loss(d_outs, target):
 
     for d_out in d_outs:
         targets = d_out.new_full(size=d_out.size(), fill_value=target)
-        # loss += F.binary_cross_entropy_with_logits(d_out, targets)
-        sign = 2*target - 1
-        loss += sign * d_out.mean()
-        floss = loss / len(d_outs)
+        loss += F.binary_cross_entropy_with_logits(d_out, targets)
+        # loss += (2*target - 1) * d_out.mean()
+        # floss = loss / len(d_outs)
     return loss / len(d_outs)
 
 
@@ -56,6 +55,10 @@ def wgan_gp_reg(discriminator, x_real, x_fake, y, center=1.):
         reg = (compute_grad2(d_out, x_interp).sqrt() - center).pow(2).mean()
 
         return reg
+
+def toggle_grad(model, requires_grad):
+    for p in model.parameters():
+        p.requires_grad_(requires_grad)
 
 def save_data(label, rays, iteration, save_dir='./saved_data'):
     """

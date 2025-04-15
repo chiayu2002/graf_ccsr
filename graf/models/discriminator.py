@@ -71,8 +71,15 @@ class Discriminator(nn.Module):
 
         # 條件嵌入模塊
         if cond:
+            # self.condition_embedding = nn.Sequential(
+            #     nn.Embedding(num_classes, ndf * 8),
+            #     nn.LayerNorm(ndf * 8)
+                # )
             self.condition_embedding = nn.Sequential(
                 nn.Embedding(num_classes, ndf * 8),
+                nn.LayerNorm(ndf * 8),
+                nn.Linear(ndf * 8,ndf * 8),
+                nn.ReLU(), 
                 nn.LayerNorm(ndf * 8)
                 )
 

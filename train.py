@@ -9,19 +9,20 @@ from tqdm import tqdm
 import torch
 torch.set_default_tensor_type('torch.cuda.FloatTensor')
 import wandb
+import pprint
 import sys
 sys.path.append('submodules')
 
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config
 from graf.utils import get_zdist, visualize_coordinate_system
-from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg
+from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad
 from graf.transforms import ImgToPatch
 from graf.models.vit_model import ViewConsistencyTransformer
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 def setup_directories(config):
     out_dir = os.path.join(config['training']['outdir'], config['expname'])
@@ -84,17 +85,36 @@ def main():
     out_dir, checkpoint_dir = setup_directories(config)
     save_config(os.path.join(out_dir, 'config.yaml'), config)
     
+    # 初始化 wandb
+    wandb.init(
+        project="graf250311",
+        entity="vicky20020808",
+        name="RS307r",
+        config=config
+    )
+
     # 初始化model
     train_loader, generator, discriminator = initialize_training(config, device)
 
+    with open('model_architecture.txt', 'w') as f:
+        f.write('Discriminator Architecture:\n')
+        f.write('-' * 50 + '\n')
+        f.write(str(discriminator))
+        f.write('\n\n')
+        f.write('Generator Architecture:\n')
+        f.write('-' * 50 + '\n')
+        pprint.pprint(generator.module_dict, stream=f)
+
+    wandb.save("model_architecture.txt")
+
     # 初始化世界座標系統
-    canonical_poses = generator.initialize_world_coordinates()
-    canonical_pose_path = os.path.join(out_dir, 'canonical_poses.pt')
-    torch.save(canonical_poses, canonical_pose_path)
-    print(f"標準姿勢已保存到 {canonical_pose_path}")
+    # canonical_poses = generator.initialize_world_coordinates()
+    # canonical_pose_path = os.path.join(out_dir, 'canonical_poses.pt')
+    # torch.save(canonical_poses, canonical_pose_path)
+    # print(f"標準姿勢已保存到 {canonical_pose_path}")
     
-    coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
-    print(f"座標系統可視化已保存到 {coordinate_viz_path}")
+    # coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
+    # print(f"座標系統可視化已保存到 {coordinate_viz_path}")
 
     # 優化器
     lr_g = config['training']['lr_g']
@@ -107,20 +127,6 @@ def main():
     #get patch
     hwfr = config['data']['hwfr']
     img_to_patch = ImgToPatch(generator.ray_sampler, hwfr[:3])
-    
-    # 初始化 wandb
-    wandb.init(
-        project="graf250311",
-        entity="vicky20020808",
-        name="RS615",
-        config=config
-    )
-
-    # 如果啟用了 ViT，預訓練視角變換器
-    if hasattr(generator, 'use_vit') and generator.use_vit:
-        print("開始預訓練視角一致性模型...")
-        # 可以創建一個專用於預訓練的數據加載器，或者使用現有的
-        generator.pretrain_view_transformer(train_loader, epochs=5)
     
     # 設置檢查點
     checkpoint_io = CheckpointIO(checkpoint_dir=checkpoint_dir)
@@ -146,6 +152,8 @@ def main():
             it += 1
             
             generator.ray_sampler.iterations = it
+            toggle_grad(generator, False)
+            toggle_grad(discriminator, True)
             generator.train()
             discriminator.train()
 
@@ -156,79 +164,47 @@ def main():
             rgbs = img_to_patch(x_real)
             rgbs.requires_grad_(True)
 
-            # 如果使用 ViT，先更新緩存的視圖
-            if hasattr(generator, 'use_vit') and generator.use_vit:
-                # 將真實圖像轉換為合適的格式
-                real_views = rgbs.to(device)
-                generator.update_cached_views(real_views)
-
             z = zdist.sample((batch_size,))
-            x_fake, rays = generator(z, label)
-
+            
             d_real = discriminator(rgbs, label)
             dloss_real = compute_loss(d_real, 1)
+            # dloss_real.backward()
+            dloss_real.backward(retain_graph=True)
             reg = 10. * compute_grad2(d_real, rgbs).mean()
+            reg.backward()
             
+            with torch.no_grad():
+                x_fake, rays = generator(z, label)
+            x_fake.requires_grad_()
 
             d_fake = discriminator(x_fake, label)
             dloss_fake = compute_loss(d_fake, 0)
+            dloss_fake.backward()
             # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
+            # reg.backward()
 
             dloss = dloss_real + dloss_fake
-            dloss_all = dloss_real + dloss_fake +reg
-            dloss_all.backward()
+            # dloss_all = dloss_real + dloss_fake +reg
+            # dloss_all.backward()
             d_optimizer.step()
+
+            toggle_grad(discriminator, False)
 
             # Generators updates
             if config['nerf']['decrease_noise']:
                 generator.decrease_nerf_noise(it)
 
+            toggle_grad(generator, True)
+            toggle_grad(discriminator, False)
+            generator.train()
+            discriminator.train()
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
             x_fake, rays= generator(z, label)
             d_fake = discriminator(x_fake, label)
 
-            gloss_disc = compute_loss(d_fake, 1) 
-
-            # 添加視角一致性損失
-            gloss_view = 0
-            if hasattr(generator, 'use_vit') and generator.use_vit:
-                # 將生成的圖像添加到緩存
-                fake_views = x_fake.view(batch_size, 32, 32, 3).permute(0, 3, 1, 2)
-                
-                # 獲取角度標籤
-                h_angles = label[:, 2].float() / 360.0  # 水平角度，規範化到 0-1
-                
-                # 根据 label[:,1] 的值选择对应的垂直角度
-                v_angles = torch.zeros_like(h_angles)
-                
-                # 垂直角度映射表
-                v_angle_map = {
-                    0: 0.5,
-                    1: 0.4166667,
-                    2: 0.3333334,
-                    3: 0.25,
-                    4: 0.1666667
-                }
-                
-                # 根据标签设置垂直角度
-                for i, v_idx in enumerate(label[:, 1].long()):
-                    v_angles[i] = v_angle_map.get(v_idx.item(), 0.25)
-                
-                # 組合為目標角度張量
-                target_angles = torch.stack([h_angles, v_angles], dim=1).to(device)
-                
-                # 預測角度
-                pred_angles = generator.view_transformer(fake_views)
-                
-                # 計算視角一致性損失
-                gloss_view = F.mse_loss(pred_angles, target_angles)
-                
-                # 添加到總損失，使用權重係數
-                gloss = gloss_disc + 0.1 * gloss_view
-            else:
-                gloss = gloss_disc
+            gloss = compute_loss(d_fake, 1) 
 
             gloss.backward()
             g_optimizer.step()
@@ -237,16 +213,15 @@ def main():
             if (it + 1) % config['training']['print_every'] == 0:
                 wandb.log({
                     "loss/discriminator": dloss,
-                    "loss/generator": gloss_disc,
-                    "loss/view_consistency": gloss_view if hasattr(generator, 'use_vit') and generator.use_vit else 0,
+                    "loss/generator": gloss,
                     "loss/regularizer": reg,
                     "iteration": it
                 })
             
             # 在需要儲存資料的位置，例如在訓練迴圈中特定迭代次數時
-            if (it % 6000 == 0):
-                # 在這裡使用當前的 label 和 rays
-                save_data(label, rays, it, save_dir=os.path.join(out_dir, 'saved_data'))
+            # if (it % 6000 == 0):
+            #     # 在這裡使用當前的 label 和 rays
+            #     save_data(label, rays, it, save_dir=os.path.join(out_dir, 'saved_data'))
 
             # (ii) Sample if necessary
             if ((it % config['training']['sample_every']) == 0) or ((it < 500) and (it % 100 == 0)):
@@ -255,7 +230,7 @@ def main():
                 plist = []
                 angle_positions = [(i/8, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))
-                label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
+                label_test = torch.tensor([[0] if i < 4 else [1] for i in range(batch_size)])
 
                 # save_dir = os.path.join(out_dir, 'poses')
                 # os.makedirs(save_dir, exist_ok=True)
@@ -267,28 +242,12 @@ def main():
                 ptest = torch.stack(plist)
 
                 rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
-
-                # 添加視角一致性可視化
-                if hasattr(generator, 'use_vit') and generator.use_vit and generator.cached_views is not None:
-                    # 獲取當前的預測角度
-                    with torch.no_grad():
-                        pred_angles = generator.view_transformer(generator.cached_views)
-                    
-                    # 記錄預測的角度
-                    for i in range(batch_size):  # 最多記錄4個樣本
-                        wandb.log({
-                            f"angles/sample_{i}_h": pred_angles[i, 0].item(),
-                            f"angles/sample_{i}_v": pred_angles[i, 1].item(),
-                            "iteration": it
-                        })
-
-                coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it)
-                    
+        
                 wandb.log({
                     "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
                     "sample/depth": [wandb.Image(depth, caption=f"Depth at iter {it}")],
                     "sample/acc": [wandb.Image(acc, caption=f"Acc at iter {it}")],
-                    "visualization/coordinate_system": wandb.Image(coordinate_viz_path, caption=f"座標系統 {it}"),
+                    # "visualization/coordinate_system": wandb.Image(coordinate_viz_path, caption=f"座標系統 {it}"),
                     "epoch_idx": epoch_idx,
                     "iteration": it
                 })

@@ -1,16 +1,6 @@
-expname: 4column250326_rs615_4
-vit:
-  enabled: true
-  img_size: 32
-  patch_size: 4
-  embed_dim: 256
-  num_heads: 8
-  num_layers: 6
-  mlp_ratio: 4
-  pretrain_epochs: 3
-  view_consistency_weight: 0.1
+expname: 4column250414_long_307330_emb
 data:
-  datadir: [data/rename/RS615]
+  datadir: [data/long/RS307, data/long/RS330]
   far: 4.5
   fov: 25
   imsize: 128  

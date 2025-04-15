@@ -98,14 +98,14 @@ def create_horizontal_collage_from_two_dirs(dir1, dir2, selected_filenames1, sel
 # 使用示例
 if __name__ == "__main__":
     # 定義兩個目錄和相應的文件列表
-    dir1 = 'data/rename/RS307test'
-    dir2 = 'data/rename/RS307test'
+    dir1 = 'data/long/RS307'
+    dir2 = 'data/long/RS330'
     
-    # selected_images1 = ['1.5_0000.jpg', '1.5_0045.jpg', '1.5_0090.jpg', '1.5_0135.jpg']
-    # selected_images2 = ['1.5_0180.jpg', '1.5_0225.jpg', '1.5_0270.jpg', '1.5_0315.jpg']
+    selected_images1 = ['0_0090.jpg', '0_0135.jpg', '0_0180.jpg', '0_0225.jpg']
+    selected_images2 = ['0_0270.jpg', '0_0315.jpg', '0_0000.jpg', '0_0045.jpg']
     
-    selected_images1 = ['1524.jpg', '2924.jpg', '5624.jpg', '7124.jpg']
-    selected_images2 = ['8247.jpg', '8238.jpg', '8222.jpg', '8214.jpg']
+    # selected_images1 = ['1524.jpg', '2924.jpg', '5624.jpg', '7124.jpg']
+    # selected_images2 = ['8247.jpg', '8238.jpg', '8222.jpg', '8214.jpg']
 
     # 指定目標尺寸 (寬, 高)
     target_size = (128, 128)  # 可以根據需要調整
@@ -115,5 +115,5 @@ if __name__ == "__main__":
         dir1, dir2, 
         selected_images1, selected_images2,
         target_size=target_size,
-        output_path='RS330_ran.jpg'
+        output_path='RS307330_long.jpg'
     )

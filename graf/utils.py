@@ -173,24 +173,25 @@ def visualize_coordinate_system(generator, out_dir, it):
     將可視化保存到文件。
     """
     import matplotlib.pyplot as plt
+    import matplotlib
     from mpl_toolkits.mplot3d import Axes3D
     
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
     
     # 原點
-    ax.scatter([0], [0], [0], color='black', s=100, label='原點')
+    ax.scatter([0], [0], [0], color='black', s=100, label='Origin')
     
     # 軸
-    ax.quiver(0, 0, 0, 1, 0, 0, color='red', label='X軸')
-    ax.quiver(0, 0, 0, 0, 1, 0, color='green', label='Y軸')
-    ax.quiver(0, 0, 0, 0, 0, 1, color='blue', label='Z軸')
+    ax.quiver(0, 0, 0, 1, 0, 0, color='red', label='X-axis')
+    ax.quiver(0, 0, 0, 0, 1, 0, color='green', label='Y-axis')
+    ax.quiver(0, 0, 0, 0, 0, 1, color='blue', label='Z-axis')
     
     # 相機位置（標準視圖）
     canonical_poses = generator.get_canonical_poses()
     for name, pose in canonical_poses.items():
         pos = pose[:3, 3].cpu().numpy()
-        ax.scatter(pos[0], pos[1], pos[2], label=f'相機: {name}')
+        ax.scatter(pos[0], pos[1], pos[2], label=f'Camera: {name}')
     
     # 設置視圖限制
     r = generator.radius if not isinstance(generator.radius, tuple) else 4.0
@@ -209,3 +210,49 @@ def visualize_coordinate_system(generator, out_dir, it):
     plt.close(fig)
     
     return fig_path
+
+def define_strain_gauge_coordinate_system(strain_direction=(1.0, 0.0, 0.0)):
+    """
+    定义以应变计方向为X轴正方向的全局坐标系
+    
+    参数:
+    strain_direction: 应变计方向的3D向量(默认为X轴正方向)
+    
+    返回:
+    transform_matrix: 从原始坐标系到应变计坐标系的变换矩阵
+    """
+    # 归一化应变计方向作为X轴
+    x_axis = np.array(strain_direction, dtype=np.float32)
+    x_axis = x_axis / np.linalg.norm(x_axis)
+    
+    # 找一个垂直于X轴的向量作为临时向量
+    temp = np.array([0.0, 1.0, 0.0])
+    
+    # 使用叉积构建Y轴和Z轴
+    z_axis = np.cross(x_axis, temp)
+    z_axis = z_axis / np.linalg.norm(z_axis)
+    
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
+    
+    # 构建旋转矩阵
+    rotation = np.column_stack([x_axis, y_axis, z_axis])
+    
+    # 创建转换矩阵
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    
+    return transform
+
+def get_strain_gauge_direction(label):
+    """
+    根据标签确定应变计方向
+    
+    参数:
+    label: 包含标签信息的张量
+    
+    返回:
+    应变计方向向量 (始终为X轴正方向)
+    """
+    # 所有情况下都返回X轴正方向
+    return [1.0, 0.0, 0.0]

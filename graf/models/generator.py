@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from ..utils import sample_on_sphere, look_at, to_sphere
+from ..utils import sample_on_sphere, look_at, to_sphere, get_strain_gauge_direction, define_strain_gauge_coordinate_system
 from graf.transforms import ImgToPatch
 from ..transforms import FullRaySampler
 from submodules.nerf_pytorch.run_nerf_mod import render, run_network            # import conditional render
@@ -49,84 +49,6 @@ class Generator(object):
 
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
-        # 添加 ViT 視角一致性模型
-        self.use_vit = use_vit
-        self.cached_views = None
-
-        if use_vit:
-            self.view_transformer = ViewConsistencyTransformer(
-                img_size=32,
-                patch_size=4,
-                in_chans=3,
-                embed_dim=256
-            ).to(device)
-
-            # 添加到模塊字典中以便管理參數
-            self.module_dict['view_transformer'] = self.view_transformer
-            self._parameters += list(self.view_transformer.parameters())
-            self._named_parameters += list(self.view_transformer.named_parameters())
-
-    # 添加一個方法來更新緩存的視圖
-    def update_cached_views(self, views):
-        """更新用於 ViT 分析的緩存視圖"""
-        self.cached_views = views.to(self.device)
-    
-    # 添加一個幫助函數來預訓練 ViT
-    def pretrain_view_transformer(self, dataloader, epochs=5, lr=1e-4):
-        """預訓練視角變換器，使其能夠預測準確的角度"""
-        if not self.use_vit:
-            print("ViT 未啟用，無法預訓練")
-            return
-        
-        optimizer = torch.optim.Adam(self.view_transformer.parameters(), lr=lr)
-        
-        for epoch in range(epochs):
-            total_loss = 0
-            for imgs, labels in dataloader:
-                optimizer.zero_grad()
-                
-                imgs = imgs.to(self.device)
-                hwf = [128, 128, 288.68534423437166]
-                img_to_patch = ImgToPatch(self.ray_sampler, hwf)
-                rgbs = img_to_patch(imgs)
-                
-                # 獲取角度標籤
-                h_angles = labels[:, 2].float().to(self.device) / 360.0  # 水平角度，規範化到 0-1
-                
-                # 根据 label[:,1] 的值选择对应的垂直角度
-                v_angles = torch.zeros_like(h_angles)
-                
-                # 垂直角度映射表
-                v_angle_map = {
-                    0: 0.5,
-                    1: 0.4166667,
-                    2: 0.3333334,
-                    3: 0.25,
-                    4: 0.1666667
-                }
-                
-                # 根据标签设置垂直角度
-                for i, v_idx in enumerate(labels[:, 1].long()):
-                    v_angles[i] = v_angle_map.get(v_idx.item(), 0.25)
-                
-                # 組合為目標角度張量
-                target_angles = torch.stack([h_angles, v_angles], dim=1)
-                
-                # 預測角度
-                pred_angles = self.view_transformer(rgbs)
-                
-                # 計算損失
-                loss = F.mse_loss(pred_angles, target_angles)
-                
-                loss.backward()
-                optimizer.step()
-                
-                total_loss += loss.item()
-            
-            print(f"Epoch {epoch+1}/{epochs}, Avg Loss: {total_loss/len(dataloader):.6f}")
-        
-        print("視角變換器預訓練完成")
-
     def __call__(self, z, label, rays=None):
         bs = z.shape[0]
         if rays is None:
@@ -136,34 +58,16 @@ class Generator(object):
                 all_rays = []
                 v_list = [float(x.strip()) for x in self.v.split(",")]
 
-                # 如果使用 ViT 且有緩存視圖，預測角度
-                angles = None
-                if self.use_vit and self.cached_views is not None:
-                    angles = self.view_transformer(self.cached_views)
-
                 for i in range(label.size(0)):
                     second_value = label[i, 1].item()
                     index = int(label[i, 2].item())  # 得到第3個值
-                    
-                    # 基礎 u 值計算
+
+                    # 基礎 u v值計算
                     selected_u = index / 360
-                    
-                    # 如果使用 ViT 且有預測角度，應用預測結果
-                    if self.use_vit and angles is not None:
-                        # 使用預測的水平角度（或混合使用）
-                        pred_u = angles[i, 0].item()
-                        # 可以選擇直接使用預測值或與原始值混合
-                        selected_u = (selected_u + pred_u) / 2  # 混合原始值和預測值
-                        
-                        # 使用預測的垂直角度
-                        # selected_v = angles[i, 1].item()  # 已在 0-0.5 範圍內
-                        selected_v = v_list[int(second_value)]
-                    else:
-                        # 使用預設的垂直角度
-                        selected_v = v_list[min(int(second_value), len(v_list) - 1)]
-                    
+                    selected_v = v_list[int(second_value)]
+
                     # 使用選定的角度生成光線
-                    rays = torch.cat([self.sample_select_rays(selected_u, selected_v)], dim=1)
+                    rays = self.sample_select_rays(selected_u, selected_v)
                     all_rays.append(rays)
                     
                 rays = torch.cat(all_rays, dim=1)
