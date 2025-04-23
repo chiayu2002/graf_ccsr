@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 class Discriminator(nn.Module):
     def __init__(self, nc=3, ndf=64, imsize=64, hflip=False, num_classes=1, cond=True):
         super(Discriminator, self).__init__()
@@ -44,7 +43,7 @@ class Discriminator(nn.Module):
         else:
             blocks += [
                 # input is (nc) x 32 x 32
-                nn.Conv2d(nc, ndf * 2, 4, 2, 1, bias=False),
+                nn.Conv2d(nc+self.num_classes, ndf * 2, 4, 2, 1, bias=False),
                 nn.BatchNorm2d(ndf * 2),
                 # IN(ndf * 2),
                 nn.LeakyReLU(0.2, inplace=True),
@@ -65,23 +64,20 @@ class Discriminator(nn.Module):
             # SN(nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)),
             # nn.Sigmoid()
         ]
-        self.conv_out = nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)
+        self.conv_out = nn.Conv2d(ndf * 8, 1+self.num_classes, 4, 1, 0, bias=False)
         blocks = [x for x in blocks if x]
         self.main = nn.Sequential(*blocks)
 
-        # 條件嵌入模塊
-        if cond:
-            # self.condition_embedding = nn.Sequential(
-            #     nn.Embedding(num_classes, ndf * 8),
-            #     nn.LayerNorm(ndf * 8)
-                # )
-            self.condition_embedding = nn.Sequential(
-                nn.Embedding(num_classes, ndf * 8),
-                nn.LayerNorm(ndf * 8),
-                nn.Linear(ndf * 8,ndf * 8),
-                nn.ReLU(), 
-                nn.LayerNorm(ndf * 8)
-                )
+        # conv_output_size = 4
+        # flat_features_dim = ndf * 8 * 4 * 4
+
+        # self.fc = nn.Sequential(
+        #     nn.Flatten(),
+        #     nn.Linear(flat_features_dim, 1024),
+        #     nn.BatchNorm1d(1024),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Linear(1024, 1 + self.num_classes)
+        # )
 
     def forward(self, input, label, return_features=False):
         input = input[:, :self.nc]
@@ -89,26 +85,27 @@ class Discriminator(nn.Module):
 
         first_label = label[:,0]
         first_label = first_label.long().to(input.device)
-        
-        label_embedding = self.condition_embedding(first_label)
-        label_pred = label_embedding
+        batch_size = first_label.size(0)
+        one_hot = torch.zeros(batch_size, self.num_classes, device=first_label.device)
+        one_hot.scatter_(1, first_label.unsqueeze(1), 1)
+        one_hot_expanded = one_hot.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.imsize, self.imsize)
 
         if self.hflip:      # Randomly flip input horizontally
             input_flipped = input.flip(3)
             mask = torch.randint(0, 2, (len(input),1, 1, 1)).bool().expand(-1, *input.shape[1:])
             input = torch.where(mask, input, input_flipped)
-        a = self.main(input)
-        label_embedding = label_embedding.view(label_embedding.size(0), -1, 1, 1)  # (B, n_feat, 1, 1)
-        conditioned_features = a * label_embedding
-        out = self.conv_out(conditioned_features)
+        labelinput = torch.cat([input, one_hot_expanded], 1)
+        features = self.main(labelinput)
+        out = self.conv_out(features)
 
-        if return_features:
-            return out, label_pred
+        final_output = out[:, :1]
+        class_pred = out[:, 1:]
+        class_pred = class_pred.squeeze()
 
-        return out
+        return final_output, class_pred
 
-import torch
-import torch.nn as nn
+# import torch
+# import torch.nn as nn
 
 # class Dvgg(nn.Module):
 #     def __init__(self, num_classes):

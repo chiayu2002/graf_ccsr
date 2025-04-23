@@ -87,17 +87,17 @@ class NeRF(nn.Module):
         # self.views_linears = nn.ModuleList(
         #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
         
-        # self.condition_embedding = nn.Sequential(
-        #         nn.Embedding(numclasses, W),
-        #         nn.LayerNorm(W)
-        #         )
         self.condition_embedding = nn.Sequential(
                 nn.Embedding(numclasses, W),
-                nn.LayerNorm(W),
-                nn.Linear(W,W),
-                nn.ReLU(), 
                 nn.LayerNorm(W)
                 )
+        # self.condition_embedding = nn.Sequential(
+        #         nn.Embedding(numclasses, W),
+        #         nn.LayerNorm(W),
+        #         nn.Linear(W,W),
+        #         nn.ReLU(), 
+        #         nn.LayerNorm(W)
+        #         )
             
         if use_viewdirs:
             self.feature_linear = nn.Linear(W, W)
@@ -127,8 +127,13 @@ class NeRF(nn.Module):
         if self.use_viewdirs:
             alpha = self.alpha_linear(h)
             feature = self.feature_linear(h)
-
+            # input_d, input_shape = torch.split(input_views, [27, 256], dim=-1)
+            # conditioned_shape = input_shape * label_embedding
+            # label_feat = torch.cat([input_d, conditioned_shape],dim=-1)
             h = torch.cat([feature, input_views], -1)
+            # label_feat = feature * label_embedding
+
+            # h = torch.cat([label_feat, input_views], -1)
         
             for i, l in enumerate(self.views_linears):
                 h = self.views_linears[i](h)
@@ -139,7 +144,7 @@ class NeRF(nn.Module):
         else:
             outputs = self.output_linear(h)
 
-        return outputs    
+        return outputs   
 
     def load_weights_from_keras(self, weights):
         assert self.use_viewdirs, "Not implemented if use_viewdirs=False"

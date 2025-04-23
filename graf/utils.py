@@ -5,7 +5,6 @@ import os
 import torchvision
 from torch import distributions
 
-
 def get_zdist(dist_name, dim, device=None):
     # Get distribution
     if dist_name == 'uniform':

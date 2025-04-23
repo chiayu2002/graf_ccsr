@@ -39,6 +39,9 @@ def run_network(inputs, viewdirs, fn, label, embed_fn, embeddirs_fn, features=No
         # expand features to shape of flattened inputs  524288 256
         features = features.unsqueeze(1).expand(-1, inputs.shape[1], -1).flatten(0, 1)
         features_shape = features
+        # feat_dim_appearance =256
+        # features_shape = features[:, :-feat_dim_appearance]
+        # features_appearance = features[:, -feat_dim_appearance:]
 
         embedded = torch.cat([embedded, features_shape], -1)
         # print(f"features: {features_shape}")  319
@@ -48,6 +51,9 @@ def run_network(inputs, viewdirs, fn, label, embed_fn, embeddirs_fn, features=No
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])  #524288 3
         embedded_dirs = embeddirs_fn(input_dirs_flat) #524288 27
         embedded = torch.cat([embedded, embedded_dirs], -1)  #524288 346
+        # if features_appearance is not None:
+        #     features_appearance = features_appearance[:embedded.shape[0], :]
+        #     embedded = torch.cat([embedded, features_appearance], dim=-1)
 
     outputs_flat = batchify(fn, netchunk)(embedded, label)
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])  #8192 64 4
@@ -130,16 +136,17 @@ def create_nerf(args):
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
     input_ch += args.feat_dim 
+    # input_ch += args.feat_dim - 256
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-
+    # input_ch_views += args.feat_dim
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs, numclasses=args.num_class)
     grad_vars = list(model.parameters())
     named_params = list(model.named_parameters())
 

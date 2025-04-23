@@ -9,6 +9,21 @@ import numpy as np
 import os
 
 
+class MCE_Loss(nn.Module):
+    def __init__(self):
+        super(MCE_Loss, self).__init__()
+
+    def __call__(self, n_each_task, output, target):
+        loss = []
+        for i, n in enumerate(n_each_task):
+            if i == 0:
+                loss.append(nn.CrossEntropyLoss()(output[:, :n], target[:, :n]))
+            else:
+                summation = sum(n_each_task[:i])
+                loss.append(nn.CrossEntropyLoss()(output[:, summation:summation+n], target[:, summation:summation+n]))
+        
+        return sum(loss)
+
 def compute_loss(d_outs, target):
 
     d_outs = [d_outs] if not isinstance(d_outs, list) else d_outs

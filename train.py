@@ -16,7 +16,7 @@ sys.path.append('submodules')
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config
 from graf.utils import get_zdist, visualize_coordinate_system
-from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad
+from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss
 from graf.transforms import ImgToPatch
 from graf.models.vit_model import ViewConsistencyTransformer
  
@@ -150,6 +150,13 @@ def main():
         epoch_idx += 1
         for x_real, label in tqdm(train_loader, desc=f"Epoch {epoch_idx}"):
             it += 1
+
+            mce_loss = MCE_Loss()
+            first_label = label[:,0]
+            first_label = first_label.long()
+            batch_size = first_label.size(0)
+            one_hot = torch.zeros(batch_size, 2, device=first_label.device)
+            one_hot.scatter_(1, first_label.unsqueeze(1), 1)
             
             generator.ray_sampler.iterations = it
             toggle_grad(generator, False)
@@ -166,26 +173,29 @@ def main():
 
             z = zdist.sample((batch_size,))
             
-            d_real = discriminator(rgbs, label)
+            d_real, label_real = discriminator(rgbs, label)
             dloss_real = compute_loss(d_real, 1)
+            one_hot = one_hot.to(label_real.device)
+            d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
-            dloss_real.backward(retain_graph=True)
+            # dloss_real.backward(retain_graph=True)
             reg = 10. * compute_grad2(d_real, rgbs).mean()
-            reg.backward()
+            # reg.backward()
             
             with torch.no_grad():
-                x_fake, rays = generator(z, label)
+                x_fake, _ = generator(z, label)
             x_fake.requires_grad_()
 
-            d_fake = discriminator(x_fake, label)
+            d_fake, _ = discriminator(x_fake, label)
             dloss_fake = compute_loss(d_fake, 0)
-            dloss_fake.backward()
+            # dloss_fake.backward()
             # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
             # reg.backward()
 
-            dloss = dloss_real + dloss_fake
+            dloss = dloss_real + dloss_fake + d_label_loss
+            total_d_loss = dloss_real + dloss_fake + d_label_loss + reg
             # dloss_all = dloss_real + dloss_fake +reg
-            # dloss_all.backward()
+            total_d_loss.backward()
             d_optimizer.step()
 
             toggle_grad(discriminator, False)
@@ -201,12 +211,15 @@ def main():
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
-            x_fake, rays= generator(z, label)
-            d_fake = discriminator(x_fake, label)
+            x_fake, _= generator(z, label)
+            d_fake, label_fake = discriminator(x_fake, label)
+            g_label_loss = mce_loss([2], label_fake, one_hot)
 
             gloss = compute_loss(d_fake, 1) 
+            gloss_all = gloss + g_label_loss
 
-            gloss.backward()
+            gloss_all.backward()
+            # gloss.backward()
             g_optimizer.step()
                 
             # wandb
@@ -214,6 +227,8 @@ def main():
                 wandb.log({
                     "loss/discriminator": dloss,
                     "loss/generator": gloss,
+                    "loss/d_label":d_label_loss,
+                    "loss/g_label":g_label_loss,
                     "loss/regularizer": reg,
                     "iteration": it
                 })

@@ -1,4 +1,4 @@
-expname: 4column250414_long_307330_emb
+expname: 4column250423_plusreg
 data:
   datadir: [data/long/RS307, data/long/RS330]
   far: 4.5
@@ -16,7 +16,7 @@ data:
   # v: 0.4166667, 0.3333334, 0.25, 0.1666667, 0.1166667
   v: 0.5, 0.4166667, 0.3333334, 0.25, 0.1666667  #90 80.406 70.529 60 48.19
 discriminator:
-  num_classes: 4   
+  num_classes: 2   
   hflip: false
   ndf: 64 #64 #128
 nerf:
