@@ -1,4 +1,4 @@
-expname: 4column250423_plusreg
+expname: 4column250425_reg10_fc
 data:
   datadir: [data/long/RS307, data/long/RS330]
   far: 4.5
@@ -65,4 +65,5 @@ training:
   take_model_average: true
 z_dist:
   dim: 256
+  # dim_appearance: 128 
   type: gauss

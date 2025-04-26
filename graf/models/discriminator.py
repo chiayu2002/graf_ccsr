@@ -68,16 +68,13 @@ class Discriminator(nn.Module):
         blocks = [x for x in blocks if x]
         self.main = nn.Sequential(*blocks)
 
-        # conv_output_size = 4
-        # flat_features_dim = ndf * 8 * 4 * 4
-
-        # self.fc = nn.Sequential(
-        #     nn.Flatten(),
-        #     nn.Linear(flat_features_dim, 1024),
-        #     nn.BatchNorm1d(1024),
-        #     nn.LeakyReLU(0.2, inplace=True),
-        #     nn.Linear(1024, 1 + self.num_classes)
-        # )
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.num_classes, 512),
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(512, self.num_classes)
+        )
 
     def forward(self, input, label, return_features=False):
         input = input[:, :self.nc]
@@ -101,8 +98,9 @@ class Discriminator(nn.Module):
         final_output = out[:, :1]
         class_pred = out[:, 1:]
         class_pred = class_pred.squeeze()
+        class_out = self.fc(class_pred)
 
-        return final_output, class_pred
+        return final_output, class_out
 
 # import torch
 # import torch.nn as nn

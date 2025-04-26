@@ -73,6 +73,7 @@ def build_models(config, disc=True):
     config_nerf.netchunk = config['training']['netchunk']
     config_nerf.feat_dim = config['z_dist']['dim']
     config_nerf.num_class = config['discriminator']['num_classes']
+    # config_nerf.feat_dim_appearance = config['z_dist']['dim_appearance']
 
     render_kwargs_train, render_kwargs_test, params, named_parameters = create_nerf(config_nerf)
 

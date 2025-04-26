@@ -24,16 +24,16 @@ from graf.config import get_data, build_models, get_render_poses, load_config
 from graf.utils import count_trainable_parameters, to_phi, to_theta, get_nsamples, get_zdist
 from graf.transforms import ImgToPatch
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-checkpoint_path = '/Data/home/vicky/graf250311/results/4column250414_long_307330_emb/chkpts/model_00099999.pt'
+checkpoint_path = '/Data/home/vicky/graf250311/results/4column250424_reg9/chkpts/model_00099999.pt'
 
 if __name__ == '__main__':
     # Arguments
     parser = argparse.ArgumentParser(
         description='Train a GAN with different regularization strategies.'
     )
-    parser.add_argument('--config', default='/Data/home/vicky/graf250311/results/4column250414_long_307330_emb/config.yaml', type=str, help='Path to config file.')
+    parser.add_argument('--config', default='/Data/home/vicky/graf250311/results/4column250424_reg9/config.yaml', type=str, help='Path to config file.')
     parser.add_argument('--fid_kid', action='store_true', help='Evaluate FID and KID.')
     parser.add_argument('--create_sample', default= True, help='Generate videos with changing camera pose.')
     parser.add_argument('--rotation_elevation', action='store_true', help='Generate videos with changing camera pose.')
@@ -132,8 +132,8 @@ if __name__ == '__main__':
         # original_positions = [(0.15, 0.24),(0.29, 0.24), (0.56, 0.24), (0.71, 0.24), (0.82, 0.47), 
         #   (0.82, 0.38), (0.82, 0.22),(0.82, 0.14)]
         # angle_positions = [(u + 0.25, v) for u, v in original_positions] 
-        angle_positions= [(i/8+0.25, 0.5) for i in range(8)] 
-        label = create_labels(N_samples, 1)
+        angle_positions= [(i/8+0.75, 0.5) for i in range(8)] 
+        label = create_labels(N_samples, 0)
 
         z = zdist.sample((N_samples,))
         all_rgb = []
@@ -149,10 +149,38 @@ if __name__ == '__main__':
         rgb = ((rgb / 2 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
         rgb = rgb.float() / 255        
         n_vis = 8
-        filename = 'fake_samples_330.png'
+        filename = 'fake_samples_307.png'
         outpath = os.path.join(eval_dir, filename)
         save_image(rgb, outpath, nrow=n_vis)
 
+    if args.rotation_elevation:
+        N_samples = 1
+        N_poses = 20            # corresponds to number of frames
+        render_radius = config['data']['radius']
+        if isinstance(render_radius, str):  # use maximum radius
+            render_radius = float(render_radius.split(',')[1])
+
+        # compute render poses
+        def get_render_poses_rotation_elevation(N_poses=float('inf')):
+            """Compute equidistant render poses varying azimuth and polar angle, respectively."""
+            range_theta = to_theta(0.5)
+            range_phi = (to_phi(config['data']['umin']+0.5), to_phi(config['data']['umax']+0.5))
+
+            N_phi = min(int(range_phi[1] - range_phi[0]), N_poses)  # at least 1 frame per degree
+
+            render_poses_rotation = get_render_poses(render_radius, angle_range=range_phi, theta=range_theta, N=N_phi)
+
+
+            return {'rotation': render_poses_rotation}
+
+        z = zdist.sample((N_samples,))
+        label = create_labels(N_samples, 0)
+
+        for name, poses in get_render_poses_rotation_elevation(N_poses).items():
+            outpath = os.path.join(eval_dir, '{}/'.format(name))
+            os.makedirs(outpath, exist_ok=True)
+            evaluator.make_video(outpath, z, label, poses, as_gif=False)
+            torch.cuda.empty_cache()
     # Evaluation loop
     if args.fid_kid:
         # Specifically generate samples that can be saved

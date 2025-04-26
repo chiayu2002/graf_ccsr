@@ -198,8 +198,6 @@ def main():
             total_d_loss.backward()
             d_optimizer.step()
 
-            toggle_grad(discriminator, False)
-
             # Generators updates
             if config['nerf']['decrease_noise']:
                 generator.decrease_nerf_noise(it)

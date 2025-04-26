@@ -135,13 +135,13 @@ def render(H, W, focal, label, chunk=1024*32, rays=None, c2w=None, ndc=True,
 def create_nerf(args):
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
-    input_ch += args.feat_dim 
+    input_ch += args.feat_dim
     # input_ch += args.feat_dim - 256
     input_ch_views = 0
     embeddirs_fn = None
     if args.use_viewdirs:
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-    # input_ch_views += args.feat_dim
+    # input_ch_views += args.feat_dim_appearance
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
@@ -163,6 +163,8 @@ def create_nerf(args):
                                                                                   embed_fn=embed_fn,
                                                                                   embeddirs_fn=embeddirs_fn,
                                                                                   netchunk=args.netchunk,
+                                                                                #   feat_dim_appearance=args.
+                                                                                #   feat_dim_appearance
                                                                                   )
 
     render_kwargs_train = {             

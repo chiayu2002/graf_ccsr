@@ -1,8 +1,8 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=1:gpu_id=4
+#PBS -l select=1:ncpus=1:gpu_id=3
 #PBS -l place=shared
-#PBS -o output0413_long307330_emb.txt				
-#PBS -e error0413_long307330_emb.txt				
+#PBS -o output0425_reg10_fc.txt				
+#PBS -e error042_reg10_fc.txt				
 #PBS -N nerf
 cd ~/graf250311										
 
