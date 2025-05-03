@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class Discriminator(nn.Module):
     def __init__(self, nc=3, ndf=64, imsize=64, hflip=False, num_classes=1, cond=True):
@@ -64,16 +65,23 @@ class Discriminator(nn.Module):
             # SN(nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)),
             # nn.Sigmoid()
         ]
-        self.conv_out = nn.Conv2d(ndf * 8, 1+self.num_classes, 4, 1, 0, bias=False)
+        self.conv_out = nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)
         blocks = [x for x in blocks if x]
         self.main = nn.Sequential(*blocks)
 
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(self.num_classes, 512),
-            nn.BatchNorm1d(512),
+        # self.label_out = nn.Sequential(
+        #     nn.Conv2d(ndf * 8, 128, 4, bias=False),
+        #     nn.BatchNorm2d(128),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Conv2d(128, self.num_classes, 1, bias=False)
+        # )
+
+        self.label_out = nn.Sequential(
+            nn.Conv2d(ndf * 8, 256, 1, bias=False),  
+            nn.BatchNorm2d(256),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(512, self.num_classes)
+            nn.AdaptiveAvgPool2d(1),  
+            nn.Conv2d(256, num_classes, 1, bias=False)  
         )
 
     def forward(self, input, label, return_features=False):
@@ -95,112 +103,39 @@ class Discriminator(nn.Module):
         features = self.main(labelinput)
         out = self.conv_out(features)
 
-        final_output = out[:, :1]
-        class_pred = out[:, 1:]
+        # final_output = out[:, :1]
+        # class_pred = out[:, 1:]
+        # class_pred = class_pred.squeeze()
+        # class_out = self.fc(class_pred)
+        class_pred = self.label_out(features)
         class_pred = class_pred.squeeze()
-        class_out = self.fc(class_pred)
 
-        return final_output, class_out
+        return out, class_pred
+        # return features
 
-# import torch
-# import torch.nn as nn
+# class DHead(nn.Module):
+#     def __init__(self, ndf=64):
+#         super().__init__()
 
-# class Dvgg(nn.Module):
-#     def __init__(self, num_classes):
-#         super(Dvgg, self).__init__()
-#         # VGG16的特徵提取層
-#         self.features = nn.Sequential(
-#             # Block 1
-#             nn.Conv2d(3, 64, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(64, 64, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.MaxPool2d(2, 2),
-            
-#             # Block 2
-#             nn.Conv2d(64, 128, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(128, 128, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.MaxPool2d(2, 2),
-            
-#             # Block 3
-#             nn.Conv2d(128, 256, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(256, 256, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(256, 256, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.MaxPool2d(2, 2),
-            
-#             # Block 4
-#             nn.Conv2d(256, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(512, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(512, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.MaxPool2d(2, 2),
-            
-#             # Block 5
-#             nn.Conv2d(512, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(512, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(512, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.MaxPool2d(2, 2)
-#         )
-        
-#         # 分類器
-#         self.classifier = nn.Sequential(
-#             nn.Linear(512 * 7 * 7, 4096),
-#             nn.ReLU(True),
-#             nn.Dropout(),
-#             nn.Linear(4096, 4096),
-#             nn.ReLU(True),
-#             nn.Dropout(),
-#             nn.Linear(4096, num_classes)
-#         )
-        
-#     def downsample(self, x, scale_factor=0.5):
-#         """下採樣函數"""
-#         return nn.functional.interpolate(
-#             x,
-#             scale_factor=scale_factor,
-#             mode='bilinear',
-#             align_corners=False
-#         )
-        
-#     def forward(self, P_prime, I):
-#         """
-#         前向傳播
-#         Args:
-#             P_prime: 生成的圖像點 shape: [8192, 3]
-#             I: 原始圖像 shape: [8, 3, 128, 128]
-#         Returns:
-#             P_prime_cls: P'的分類結果
-#             I_cls: I的分類結果
-#         """
-#         batch_size = I.shape[0]  # 8
-        
-#         # 重塑 P_prime 為 [8, 3, 32, 32]
-#         P_prime = P_prime.view(batch_size, 3, 32, 32)
-        
-#         # 調整輸入尺寸為 VGG16 預期的 224x224
-#         P_prime = nn.functional.interpolate(P_prime, size=(224, 224), mode='bilinear', align_corners=False)
-#         I_resized = nn.functional.interpolate(I, size=(224, 224), mode='bilinear', align_corners=False)
-        
-#         # 提取特徵
-#         P_prime_features = self.features(P_prime)
-#         I_features = self.features(I_resized)
-        
-#         # 展平特徵 - 現在應該是 [8, 512, 7, 7]
-#         P_prime_flat = P_prime_features.view(P_prime_features.size(0), -1)  # [8, 25088]
-#         I_flat = I_features.view(I_features.size(0), -1)  # [8, 25088]
-        
-#         # 分類
-#         P_prime_cls = self.classifier(P_prime_flat)
-#         I_cls = self.classifier(I_flat)
-        
-#         return P_prime_cls, I_cls
+#         self.conv = nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)
+
+#     def forward(self, x):
+#         output = self.conv(x)
+
+#         return output
+
+# class QHead(nn.Module):
+#     def __init__(self, ndf=64):
+#         super().__init__()
+
+#         self.conv1 = nn.Conv2d(ndf * 8, 128, 4, bias=False)
+#         self.bn1 = nn.BatchNorm2d(128)
+
+#         self.conv_disc = nn.Conv2d(128, 2, 1)
+
+#     def forward(self, x):
+#         x = F.leaky_relu(self.bn1(self.conv1(x)), 0.2, inplace=True)
+
+#         disc_logits = self.conv_disc(x).squeeze()
+
+#         return disc_logits

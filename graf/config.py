@@ -65,7 +65,7 @@ def build_models(config, disc=True):
     from argparse import Namespace
     from submodules.nerf_pytorch.run_nerf_mod import create_nerf
     from .models.generator import Generator
-    from .models.discriminator import Discriminator
+    from .models.discriminator import Discriminator #, QHead, DHead
 
     config_nerf = Namespace(**config['nerf'])
     # Update config for NERF
@@ -114,7 +114,10 @@ def build_models(config, disc=True):
                         }
 
         discriminator = Discriminator(**disc_kwargs)
-    return generator, discriminator
+
+    # qhead = QHead()
+    # dhead = DHead()
+    return generator, discriminator   #, qhead, dhead
 
 def load_config(config_path):
     with open(config_path, 'r') as f:

@@ -1,5 +1,5 @@
 import torch
-from torch.nn import functional as F
+# from torch.nn import functional as F
 import torch.utils.data
 import torch.utils.data.distributed
 from torch import autograd
@@ -28,10 +28,12 @@ def compute_loss(d_outs, target):
 
     d_outs = [d_outs] if not isinstance(d_outs, list) else d_outs
     loss = 0
+    BCEWithLogitsLoss = nn.BCEWithLogitsLoss()
 
     for d_out in d_outs:
         targets = d_out.new_full(size=d_out.size(), fill_value=target)
-        loss += F.binary_cross_entropy_with_logits(d_out, targets)
+        # loss += F.binary_cross_entropy_with_logits(d_out, targets)
+        loss += BCEWithLogitsLoss(d_out, targets)
         # loss += (2*target - 1) * d_out.mean()
         # floss = loss / len(d_outs)
     return loss / len(d_outs)

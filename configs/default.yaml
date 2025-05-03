@@ -1,4 +1,4 @@
-expname: 4column250425_reg10_fc
+expname: 4column250503_nerf9
 data:
   datadir: [data/long/RS307, data/long/RS330]
   far: 4.5

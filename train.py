@@ -52,11 +52,13 @@ def initialize_training(config, device):
     )
     
     # Create models
-    generator, discriminator = build_models(config)
+    generator, discriminator = build_models(config) #, qhead, dhead
     generator = generator.to(device)
     discriminator = discriminator.to(device)
+    # qhead = qhead.to(device)
+    # dhead = dhead.to(device)
     
-    return train_loader, generator, discriminator
+    return train_loader, generator, discriminator #, qhead, dhead
 
 def set_random_seed(seed):
     torch.manual_seed(seed)
@@ -87,16 +89,17 @@ def main():
     
     # 初始化 wandb
     wandb.init(
-        project="graf250311",
+        project="graf250428",
         entity="vicky20020808",
-        name="RS307r",
+        name="RS307 330",
         config=config
     )
 
     # 初始化model
-    train_loader, generator, discriminator = initialize_training(config, device)
+    train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead 
 
-    with open('model_architecture.txt', 'w') as f:
+    file_path = os.path.join(out_dir, "model_architecture.txt")
+    with open(file_path, 'w') as f:
         f.write('Discriminator Architecture:\n')
         f.write('-' * 50 + '\n')
         f.write(str(discriminator))
@@ -105,7 +108,7 @@ def main():
         f.write('-' * 50 + '\n')
         pprint.pprint(generator.module_dict, stream=f)
 
-    wandb.save("model_architecture.txt")
+    wandb.save(file_path)
 
     # 初始化世界座標系統
     # canonical_poses = generator.initialize_world_coordinates()
@@ -121,8 +124,12 @@ def main():
     lr_d = config['training']['lr_d']
     g_params = generator.parameters()
     d_params = discriminator.parameters()
+    # g_params = list(generator.parameters()) + list(qhead.parameters())
+    # d_params = list(discriminator.parameters()) + list(dhead.parameters())
     g_optimizer = optim.RMSprop(g_params, lr=lr_g, alpha=0.99, eps=1e-8)
     d_optimizer = optim.RMSprop(d_params, lr=lr_d, alpha=0.99, eps=1e-8)
+    # g_optimizer = optim.Adam(g_params, lr=lr_g, betas=(0.5, 0.999), eps=1e-8)
+    # d_optimizer = optim.Adam(d_params, lr=lr_d, betas=(0.5, 0.999), eps=1e-8)
 
     #get patch
     hwfr = config['data']['hwfr']
@@ -163,6 +170,8 @@ def main():
             toggle_grad(discriminator, True)
             generator.train()
             discriminator.train()
+            # qhead.train()
+            # dhead.train()
 
             # Discriminator updates
             d_optimizer.zero_grad()
@@ -173,7 +182,10 @@ def main():
 
             z = zdist.sample((batch_size,))
             
+            #real data
             d_real, label_real = discriminator(rgbs, label)
+            # output1 = discriminator(rgbs, label)
+            # d_real = dhead(output1)
             dloss_real = compute_loss(d_real, 1)
             one_hot = one_hot.to(label_real.device)
             d_label_loss = mce_loss([2], label_real, one_hot)
@@ -182,17 +194,20 @@ def main():
             reg = 10. * compute_grad2(d_real, rgbs).mean()
             # reg.backward()
             
+            #fake data
             with torch.no_grad():
                 x_fake, _ = generator(z, label)
             x_fake.requires_grad_()
 
             d_fake, _ = discriminator(x_fake, label)
+            # output2 = discriminator(x_fake, label)
+            # d_fake = dhead(output2)
             dloss_fake = compute_loss(d_fake, 0)
             # dloss_fake.backward()
             # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
             # reg.backward()
 
-            dloss = dloss_real + dloss_fake + d_label_loss
+            # dloss = dloss_real + dloss_fake
             total_d_loss = dloss_real + dloss_fake + d_label_loss + reg
             # dloss_all = dloss_real + dloss_fake +reg
             total_d_loss.backward()
@@ -206,14 +221,20 @@ def main():
             toggle_grad(discriminator, False)
             generator.train()
             discriminator.train()
+            # qhead.train()
+            # dhead.train()
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
             x_fake, _= generator(z, label)
             d_fake, label_fake = discriminator(x_fake, label)
+            # output = discriminator(x_fake, label)
+            # d_fake = dhead(output)
             g_label_loss = mce_loss([2], label_fake, one_hot)
 
             gloss = compute_loss(d_fake, 1) 
+            # label_fake = qhead(output)
+            # label_loss = mce_loss([2], label_fake, one_hot.to(device))
             gloss_all = gloss + g_label_loss
 
             gloss_all.backward()
@@ -223,7 +244,7 @@ def main():
             # wandb
             if (it + 1) % config['training']['print_every'] == 0:
                 wandb.log({
-                    "loss/discriminator": dloss,
+                    "loss/discriminator": total_d_loss,
                     "loss/generator": gloss,
                     "loss/d_label":d_label_loss,
                     "loss/g_label":g_label_loss,
@@ -243,7 +264,7 @@ def main():
                 plist = []
                 angle_positions = [(i/8, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))
-                label_test = torch.tensor([[0] if i < 4 else [1] for i in range(batch_size)])
+                label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
 
                 # save_dir = os.path.join(out_dir, 'poses')
                 # os.makedirs(save_dir, exist_ok=True)
@@ -266,7 +287,7 @@ def main():
                 })
 
             # (i) Backup if necessary
-            if ((it + 1) % 50000) == 0:
+            if ((it + 1) % 10000) == 0:
                 print('Saving backup...')
                 checkpoint_io.save('model_%08d.pt' % it, it=it, epoch_idx=epoch_idx, save_to_wandb=True)
 
