@@ -14,8 +14,8 @@ import sys
 sys.path.append('submodules')
 
 from graf.gan_training import Evaluator
-from graf.config import get_data, build_models, load_config, save_config
-from graf.utils import get_zdist, visualize_coordinate_system
+from graf.config import get_data, build_models, load_config, save_config, build_lr_scheduler
+from graf.utils import get_zdist
 from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss
 from graf.transforms import ImgToPatch
 from graf.models.vit_model import ViewConsistencyTransformer
@@ -81,6 +81,7 @@ def main():
     restart_every = config['training']['restart_every']
     batch_size=config['training']['batch_size']
     fid_every = config['training']['fid_every']
+    save_best = config['training']['save_best']
     device = torch.device("cuda:0")
     
     # 創建目錄
@@ -89,8 +90,8 @@ def main():
     
     # 初始化 wandb
     wandb.init(
-        project="graf250428",
-        entity="vicky20020808",
+        project="graf250520",
+        # entity="vicky20020808",
         name="RS307 330",
         config=config
     )
@@ -109,15 +110,6 @@ def main():
         pprint.pprint(generator.module_dict, stream=f)
 
     wandb.save(file_path)
-
-    # 初始化世界座標系統
-    # canonical_poses = generator.initialize_world_coordinates()
-    # canonical_pose_path = os.path.join(out_dir, 'canonical_poses.pt')
-    # torch.save(canonical_poses, canonical_pose_path)
-    # print(f"標準姿勢已保存到 {canonical_pose_path}")
-    
-    # coordinate_viz_path = visualize_coordinate_system(generator, out_dir, it=0)
-    # print(f"座標系統可視化已保存到 {coordinate_viz_path}")
 
     # 優化器
     lr_g = config['training']['lr_g']
@@ -149,10 +141,23 @@ def main():
     # Evaluator
     evaluator = Evaluator(fid_every > 0, generator, zdist, None,
                           batch_size=batch_size, device=device, inception_nsamples=33)
+    val_loader = train_loader
+    if fid_every > 0:
+        fid_cache_file = os.path.join(out_dir, 'fid_cache_train.npz')
+        kid_cache_file = os.path.join(out_dir, 'kid_cache_train.npz')
+        evaluator.inception_eval.initialize_target(val_loader, cache_file=fid_cache_file, act_cache_file=kid_cache_file)
+    
+    fid_best = float('inf')
+    kid_best = float('inf')
     
     it = epoch_idx = -1
     tstart = t0 = time.time()
     
+    g_scheduler = build_lr_scheduler(g_optimizer, config, last_epoch=it)
+    d_scheduler = build_lr_scheduler(d_optimizer, config, last_epoch=it)
+    config['training']['lr_g'] = lr_g
+    config['training']['lr_d'] = lr_d
+
     while True:
         epoch_idx += 1
         for x_real, label in tqdm(train_loader, desc=f"Epoch {epoch_idx}"):
@@ -162,7 +167,7 @@ def main():
             first_label = label[:,0]
             first_label = first_label.long()
             batch_size = first_label.size(0)
-            one_hot = torch.zeros(batch_size, 2, device=first_label.device)
+            one_hot = torch.zeros(batch_size, 1, device=first_label.device)
             one_hot.scatter_(1, first_label.unsqueeze(1), 1)
             
             generator.ray_sampler.iterations = it
@@ -188,10 +193,10 @@ def main():
             # d_real = dhead(output1)
             dloss_real = compute_loss(d_real, 1)
             one_hot = one_hot.to(label_real.device)
-            d_label_loss = mce_loss([2], label_real, one_hot)
+            # d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
             # dloss_real.backward(retain_graph=True)
-            reg = 10. * compute_grad2(d_real, rgbs).mean()
+            reg = 50. * compute_grad2(d_real, rgbs).mean()
             # reg.backward()
             
             #fake data
@@ -208,10 +213,11 @@ def main():
             # reg.backward()
 
             # dloss = dloss_real + dloss_fake
-            total_d_loss = dloss_real + dloss_fake + d_label_loss + reg
+            total_d_loss = dloss_real + dloss_fake + reg #+ d_label_loss 
             # dloss_all = dloss_real + dloss_fake +reg
             total_d_loss.backward()
             d_optimizer.step()
+            d_scheduler.step()
 
             # Generators updates
             if config['nerf']['decrease_noise']:
@@ -230,25 +236,28 @@ def main():
             d_fake, label_fake = discriminator(x_fake, label)
             # output = discriminator(x_fake, label)
             # d_fake = dhead(output)
-            g_label_loss = mce_loss([2], label_fake, one_hot)
+            # g_label_loss = mce_loss([2], label_fake, one_hot)
 
             gloss = compute_loss(d_fake, 1) 
             # label_fake = qhead(output)
             # label_loss = mce_loss([2], label_fake, one_hot.to(device))
-            gloss_all = gloss + g_label_loss
+            gloss_all = gloss #+ g_label_loss
 
             gloss_all.backward()
             # gloss.backward()
             g_optimizer.step()
-                
+            g_scheduler.step()
+
+            current_lr_g = g_optimizer.param_groups[0]['lr']
+            current_lr_d = d_optimizer.param_groups[0]['lr']
             # wandb
             if (it + 1) % config['training']['print_every'] == 0:
                 wandb.log({
-                    "loss/discriminator": total_d_loss,
                     "loss/generator": gloss,
-                    "loss/d_label":d_label_loss,
-                    "loss/g_label":g_label_loss,
+                    "loss/discriminator": total_d_loss,
                     "loss/regularizer": reg,
+                    "learning rate/generator": current_lr_g,
+                    "learning rate/discriminator": current_lr_d,
                     "iteration": it
                 })
             
@@ -285,6 +294,32 @@ def main():
                     "epoch_idx": epoch_idx,
                     "iteration": it
                 })
+
+             # (v) Compute fid if necessary
+            if fid_every > 0 and ((it + 1) % fid_every) == 0:
+                fid, kid = evaluator.compute_fid_kid(label)
+                wandb.log({
+                        "validation/fid": fid,
+                        "validation/kid": kid,
+                        "iteration": it
+                    })
+                torch.cuda.empty_cache()
+                # save best model
+                if save_best == 'fid' and fid < fid_best:
+                    fid_best = fid
+                    print('Saving best model based on FID...')
+                    wandb.run.summary["best_fid"] = fid_best  # 更新 summary
+                    checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
+                    # logger.save_stats('stats_best.p')
+                    torch.cuda.empty_cache()
+                
+                elif save_best == 'kid' and kid < kid_best:
+                    kid_best = kid
+                    print('Saving best model based on KID...')
+                    wandb.run.summary["best_kid"] = kid_best  # 更新 summary
+                    checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
+                    # logger.save_stats('stats_best.p')
+                    torch.cuda.empty_cache()
 
             # (i) Backup if necessary
             if ((it + 1) % 10000) == 0:

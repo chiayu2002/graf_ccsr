@@ -29,9 +29,11 @@ class ImageDataset(VisionDataset):
         category_map = {
             "0_": 0,  
             "0.5_": 1, 
+            # "0.7_": 2, 
             "1_": 2, 
             "1.5_": 3,
-            "2_": 4,    
+            # "1.7_": 5, 
+            # "2_": 6,    
         }
         for dir_idx, ddir in enumerate(self.root):
             filenames = self._get_files(ddir)

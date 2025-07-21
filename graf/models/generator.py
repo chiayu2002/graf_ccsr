@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from ..utils import sample_on_sphere, look_at, to_sphere, get_strain_gauge_direction, define_strain_gauge_coordinate_system
+from ..utils import sample_on_sphere, look_at, to_sphere 
 from graf.transforms import ImgToPatch
 from ..transforms import FullRaySampler
 from submodules.nerf_pytorch.run_nerf_mod import render, run_network            # import conditional render

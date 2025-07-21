@@ -128,3 +128,22 @@ def save_config(outpath, config):
     from yaml import safe_dump
     with open(outpath, 'w') as f:
         safe_dump(config, f)
+
+def build_lr_scheduler(optimizer, config, last_epoch=-1):
+    import torch.optim as optim
+    step_size = config['training']['lr_anneal_every']
+    if isinstance(step_size, str):
+        milestones = [int(m) for m in step_size.split(',')]
+        lr_scheduler = optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=milestones,
+            gamma=config['training']['lr_anneal'],
+            last_epoch=last_epoch)
+    else:
+        lr_scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=step_size,
+            gamma=config['training']['lr_anneal'],
+            last_epoch=last_epoch
+        )
+    return lr_scheduler
