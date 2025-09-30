@@ -24,6 +24,34 @@ class MCE_Loss(nn.Module):
         
         return sum(loss)
 
+class CCSRNeRFLoss(nn.Module):
+    """CCSR與NeRF的聯合損失"""
+    
+    def __init__(self, alpha_init=1.0, alpha_decay=0.0001):
+        super().__init__()
+        self.mse_loss = nn.MSELoss()
+        self.alpha_init = alpha_init
+        self.alpha_decay = alpha_decay
+        self.iteration = 0
+        
+    def forward(self, ccsr_output, nerf_output):
+        """
+        計算CCSR輸出與NeRF輸出的MSE損失
+        
+        Args:
+            ccsr_output: CCSR生成的圖像 [B, N_samples, 3] 
+            nerf_output: NeRF渲染的圖像 [B, N_samples, 3]
+        """
+        # 動態調整權重
+        alpha = self.alpha_init * np.exp(-self.alpha_decay * self.iteration)
+        
+        # 計算MSE損失
+        consistency_loss = self.mse_loss(ccsr_output, nerf_output.detach())
+        
+        self.iteration += 1
+        return alpha * consistency_loss
+    
+
 def compute_loss(d_outs, target):
 
     d_outs = [d_outs] if not isinstance(d_outs, list) else d_outs

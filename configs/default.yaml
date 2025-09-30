@@ -1,6 +1,6 @@
-expname: column250720_enhanced7
+expname: column250923_72_kernel
 data:
-  datadir: [data/RS307_n2]
+  datadir: [data/RS307_n]
   far: 4.5
   fov: 20
   imsize: 256  
@@ -48,9 +48,9 @@ training:
   fid_every: 5000
   gan_type: standard
   lr_anneal: 0.5
-  lr_anneal_every: 50000,80000,100000
-  lr_d: 0.00005
-  lr_g: 0.0005
+  lr_anneal_every: 80000,120000,150000
+  lr_d: 0.0001
+  lr_g: 0.0006
   model_average_beta: 0.999
   model_average_reinit: false
   model_file: model.pt
@@ -59,7 +59,7 @@ training:
   optimizer: rmsprop
   outdir: ./results
   print_every: 10
-  reg_param: 50.0
+  reg_param: 80.0
   restart_every: -1
   sample_every: 500
   save_best: fid
@@ -69,3 +69,9 @@ z_dist:
   dim: 256
   # dim_appearance: 128 
   type: gauss
+ccsr: 
+        'enabled': True,
+        'num_views': 8,
+        'scale_factor': 4,
+        'alpha_init': 1.0,
+        'alpha_decay': 0.0001

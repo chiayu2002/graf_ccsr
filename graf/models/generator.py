@@ -6,14 +6,14 @@ from ..transforms import FullRaySampler
 from submodules.nerf_pytorch.run_nerf_mod import render, run_network            # import conditional render
 from functools import partial
 import torch.nn.functional as F  
-from graf.models.vit_model import ViewConsistencyTransformer
+from graf.models.ccsr import CCSR
 import os
 import pickle
 
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, reference_images=None, initial_direction=None, use_vit=True):
+                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -24,6 +24,21 @@ class Generator(object):
         self.chunk = chunk
         self.v = v
         self.use_default_rays = use_default_rays
+        self.use_ccsr = use_ccsr
+
+        # 添加CCSR模組
+        if self.use_ccsr:
+            # 假設低分辨率圖像尺寸為原圖的1/4
+            lr_height, lr_width = H // 4, W // 4
+            self.ccsr = CCSR(num_views, lr_height, lr_width, scale_factor=4).to(device)
+            
+            # 將CCSR參數加入到優化器參數列表中
+            self._parameters = parameters + list(self.ccsr.parameters())
+            self._named_parameters = named_parameters + list(self.ccsr.named_parameters())
+        else:
+            self._parameters = parameters
+            self._named_parameters = named_parameters
+
         coords = torch.from_numpy(np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), -1))
         self.coords = coords.view(-1, 2)
         self.initial_direction = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
@@ -36,6 +51,10 @@ class Generator(object):
         self._parameters = parameters
         self._named_parameters = named_parameters
         self.module_dict = {'generator': self.render_kwargs_train['network_fn']}
+
+        # 添加CCSR到module_dict
+        if self.use_ccsr:
+            self.module_dict['ccsr'] = self.ccsr
         
         for k, v in self.module_dict.items():
             if k in ['generator']:
@@ -49,7 +68,7 @@ class Generator(object):
 
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
-    def __call__(self, z, label, rays=None):
+    def __call__(self, z, label, rays=None, return_ccsr_output=False):
         bs = z.shape[0]
         if rays is None:
             if self.use_default_rays :
@@ -88,7 +107,43 @@ class Generator(object):
                    rays_to_output(acc), extras
 
         rgb = rays_to_output(rgb)
-        return rgb, rays
+
+        # 如果啟用CCSR並且需要返回CCSR輸出
+        ccsr_output = None
+        if self.use_ccsr and return_ccsr_output:
+            # 將NeRF輸出轉換為圖像格式進行CCSR處理
+            # 這裡需要根據您的patch採樣方式調整
+            total_elements = rgb.numel()
+            rgb_nerf = rgb.view(bs, total_elements // (bs * 3), 3)
+            nerf_images = rgb_nerf.view(bs, int(np.sqrt(rgb_nerf.shape[1])), int(np.sqrt(rgb_nerf.shape[1])), 3).permute(0, 3, 1, 2)
+            
+            # 生成低分辨率版本
+            patch_size = 32
+            lr_size = max(8, patch_size // 4)
+            lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size), mode='bilinear', align_corners=False)
+            
+            # 對每個樣本應用CCSR
+            ccsr_results = []
+            for i in range(bs):
+                # 使用label中的信息確定視角索引
+                # view_idx = int(label[i, 2].item()) if label.shape[1] > 2 else i
+                view_idx = 72
+                ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
+                ccsr_results.append(ccsr_result)
+            
+            ccsr_combined  = torch.cat(ccsr_results, dim=0)
+            ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size), 
+                                       mode='bilinear', align_corners=False)
+            # 轉換為與NeRF輸出相同的格式
+            ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
+
+        if return_ccsr_output:
+            ccsr_output = ccsr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
+            return rgb, rays, ccsr_output
+        else:
+            return rgb, rays
+        
+        # return rgb, rays
 
     def decrease_nerf_noise(self, it):
         end_it = 5000

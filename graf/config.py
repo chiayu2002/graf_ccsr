@@ -101,7 +101,9 @@ def build_models(config, disc=True):
                           range_v=(float(config['data']['vmin']), float(config['data']['vmax'])),
                           orthographic=config['data']['orthographic'],
                           v=config['data']['v'],
-                          use_default_rays=config['data']['use_default_rays']
+                          use_default_rays=config['data']['use_default_rays'],
+                          use_ccsr=True,  # 啟用CCSR
+                          num_views=8
                           )
     
     discriminator = None

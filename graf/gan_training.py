@@ -41,8 +41,6 @@ class Trainer(TrainerBase):
     def discriminator_trainstep(self, x_real, y, z):
         return super(Trainer, self).discriminator_trainstep(x_real, y, z)       # spectral norm raises error for when using amp
     
-    # def vgg_discriminator_trainstep(self, y, z):
-    #     return super(Trainer, self).vgg_discriminator_trainstep(y, z)
 
 
 class Evaluator(EvaluatorBase):

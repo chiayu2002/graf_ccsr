@@ -16,9 +16,9 @@ sys.path.append('submodules')
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config, build_lr_scheduler
 from graf.utils import get_zdist
-from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss
+from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss, CCSRNeRFLoss
 from graf.transforms import ImgToPatch
-from graf.models.vit_model import ViewConsistencyTransformer
+# from graf.models.vit_model import ViewConsistencyTransformer
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
@@ -98,6 +98,8 @@ def main():
 
     # 初始化model
     train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead 
+
+    ccsr_nerf_loss = CCSRNeRFLoss().to(device)
 
     file_path = os.path.join(out_dir, "model_architecture.txt")
     with open(file_path, 'w') as f:
@@ -196,7 +198,7 @@ def main():
             # d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
             # dloss_real.backward(retain_graph=True)
-            reg = 50. * compute_grad2(d_real, rgbs).mean()
+            reg = 80. * compute_grad2(d_real, rgbs).mean()
             # reg.backward()
             
             #fake data
@@ -232,16 +234,18 @@ def main():
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
-            x_fake, _= generator(z, label)
+            # x_fake, _= generator(z, label)
+            x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
             d_fake, label_fake = discriminator(x_fake, label)
             # output = discriminator(x_fake, label)
             # d_fake = dhead(output)
             # g_label_loss = mce_loss([2], label_fake, one_hot)
 
             gloss = compute_loss(d_fake, 1) 
+            ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
             # label_fake = qhead(output)
             # label_loss = mce_loss([2], label_fake, one_hot.to(device))
-            gloss_all = gloss #+ g_label_loss
+            gloss_all = gloss + ccsr_consistency_loss#+ g_label_loss
 
             gloss_all.backward()
             # gloss.backward()
@@ -254,6 +258,8 @@ def main():
             if (it + 1) % config['training']['print_every'] == 0:
                 wandb.log({
                     "loss/generator": gloss,
+                    "loss/ccsr_consistency": ccsr_consistency_loss,
+                    "loss/generator_total": gloss_all,
                     "loss/discriminator": total_d_loss,
                     "loss/regularizer": reg,
                     "learning rate/generator": current_lr_g,
