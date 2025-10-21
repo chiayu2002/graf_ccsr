@@ -7,8 +7,8 @@ import numpy as np
 import torch.optim as optim
 from tqdm import tqdm
 import torch
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
 import wandb
+import gc
 import pprint
 import sys
 sys.path.append('submodules')
@@ -38,16 +38,18 @@ def initialize_training(config, device):
         hw_ortho = (config['data']['far']-config['data']['near'],) * 2
         hwfr[2] = hw_ortho
     config['data']['hwfr'] = hwfr
-    
-    # train_loader
+
+    # train_loader - 優化記憶體使用
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=config['training']['batch_size'],
-        num_workers=config['training']['nworkers'],
-        shuffle=True, 
+        num_workers=min(config['training']['nworkers'], 4),  # 限制 workers 數量
+        shuffle=True,
         pin_memory=True,
-        sampler=None, 
+        sampler=None,
         drop_last=True,
+        prefetch_factor=2 if config['training']['nworkers'] > 0 else None,  # 預取因子
+        persistent_workers=config['training']['nworkers'] > 0,  # 持久化 workers
         generator=torch.Generator(device='cuda:0')
     )
     
@@ -73,6 +75,7 @@ def main():
     set_random_seed(0)
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='configs/default.yaml')
+    parser.add_argument('--use_amp', action='store_true', help='使用混合精度訓練以節省記憶體')
     args = parser.parse_args()
 
     # load config
@@ -97,9 +100,18 @@ def main():
     )
 
     # 初始化model
-    train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead 
+    train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead
 
+    # 初始化損失函數（在循環外創建以節省記憶體）
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
+    mce_loss = MCE_Loss()  # 移到循環外，避免重複創建
+
+    # 混合精度訓練（可選）
+    use_amp = args.use_amp
+    scaler_d = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler_g = torch.cuda.amp.GradScaler(enabled=use_amp)
+    if use_amp:
+        print("啟用混合精度訓練 (AMP) 以節省記憶體")
 
     file_path = os.path.join(out_dir, "model_architecture.txt")
     with open(file_path, 'w') as f:
@@ -165,11 +177,10 @@ def main():
         for x_real, label in tqdm(train_loader, desc=f"Epoch {epoch_idx}"):
             it += 1
 
-            mce_loss = MCE_Loss()
-            first_label = label[:,0]
-            first_label = first_label.long()
+            # 準備標籤數據
+            first_label = label[:,0].long()
             batch_size = first_label.size(0)
-            one_hot = torch.zeros(batch_size, 1, device=first_label.device)
+            one_hot = torch.zeros(batch_size, 1, device=device)
             one_hot.scatter_(1, first_label.unsqueeze(1), 1)
             
             generator.ray_sampler.iterations = it
@@ -181,45 +192,43 @@ def main():
             # dhead.train()
 
             # Discriminator updates
-            d_optimizer.zero_grad()
+            d_optimizer.zero_grad(set_to_none=True)  # set_to_none=True 節省記憶體
 
-            x_real = x_real.to(device)
+            x_real = x_real.to(device, non_blocking=True)
             rgbs = img_to_patch(x_real)
             rgbs.requires_grad_(True)
 
             z = zdist.sample((batch_size,))
-            
-            #real data
-            d_real, label_real = discriminator(rgbs, label)
-            # output1 = discriminator(rgbs, label)
-            # d_real = dhead(output1)
-            dloss_real = compute_loss(d_real, 1)
-            one_hot = one_hot.to(label_real.device)
-            # d_label_loss = mce_loss([2], label_real, one_hot)
-            # dloss_real.backward()
-            # dloss_real.backward(retain_graph=True)
+
+            # 使用混合精度進行前向傳播
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                #real data
+                d_real, label_real = discriminator(rgbs, label.to(device, non_blocking=True))
+                dloss_real = compute_loss(d_real, 1)
+
+            # 梯度計算必須在 FP32 中進行
             reg = 80. * compute_grad2(d_real, rgbs).mean()
-            # reg.backward()
-            
-            #fake data
-            with torch.no_grad():
-                x_fake, _ = generator(z, label)
-            x_fake.requires_grad_()
 
-            d_fake, _ = discriminator(x_fake, label)
-            # output2 = discriminator(x_fake, label)
-            # d_fake = dhead(output2)
-            dloss_fake = compute_loss(d_fake, 0)
-            # dloss_fake.backward()
-            # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
-            # reg.backward()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                #fake data
+                with torch.no_grad():
+                    x_fake, _ = generator(z, label.to(device, non_blocking=True))
+                x_fake.requires_grad_()
 
-            # dloss = dloss_real + dloss_fake
-            total_d_loss = dloss_real + dloss_fake + reg #+ d_label_loss 
-            # dloss_all = dloss_real + dloss_fake +reg
-            total_d_loss.backward()
-            d_optimizer.step()
+                d_fake, _ = discriminator(x_fake, label.to(device, non_blocking=True))
+                dloss_fake = compute_loss(d_fake, 0)
+
+                # 計算總損失
+                total_d_loss = dloss_real + dloss_fake + reg
+
+            # 反向傳播（使用 scaler）
+            scaler_d.scale(total_d_loss).backward()
+            scaler_d.step(d_optimizer)
+            scaler_d.update()
             d_scheduler.step()
+
+            # 釋放不需要的張量
+            del x_fake, d_real, d_fake, rgbs, dloss_real, dloss_fake, reg, total_d_loss
 
             # Generators updates
             if config['nerf']['decrease_noise']:
@@ -229,28 +238,27 @@ def main():
             toggle_grad(discriminator, False)
             generator.train()
             discriminator.train()
-            # qhead.train()
-            # dhead.train()
-            g_optimizer.zero_grad()
+            g_optimizer.zero_grad(set_to_none=True)  # set_to_none=True 節省記憶體
 
             z = zdist.sample((batch_size,))
-            # x_fake, _= generator(z, label)
-            x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
-            d_fake, label_fake = discriminator(x_fake, label)
-            # output = discriminator(x_fake, label)
-            # d_fake = dhead(output)
-            # g_label_loss = mce_loss([2], label_fake, one_hot)
 
-            gloss = compute_loss(d_fake, 1) 
-            ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
-            # label_fake = qhead(output)
-            # label_loss = mce_loss([2], label_fake, one_hot.to(device))
-            gloss_all = gloss + ccsr_consistency_loss#+ g_label_loss
+            # 使用混合精度進行前向傳播
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                x_fake, _, ccsr_output = generator(z, label.to(device, non_blocking=True), return_ccsr_output=True)
+                d_fake, label_fake = discriminator(x_fake, label.to(device, non_blocking=True))
 
-            gloss_all.backward()
-            # gloss.backward()
-            g_optimizer.step()
+                gloss = compute_loss(d_fake, 1)
+                ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
+                gloss_all = gloss + ccsr_consistency_loss
+
+            # 反向傳播（使用 scaler）
+            scaler_g.scale(gloss_all).backward()
+            scaler_g.step(g_optimizer)
+            scaler_g.update()
             g_scheduler.step()
+
+            # 釋放不需要的張量
+            del x_fake, d_fake, ccsr_output, label_fake
 
             current_lr_g = g_optimizer.param_groups[0]['lr']
             current_lr_d = d_optimizer.param_groups[0]['lr']
@@ -274,58 +282,57 @@ def main():
 
             # (ii) Sample if necessary
             if ((it % config['training']['sample_every']) == 0) or ((it < 500) and (it % 100 == 0)):
-                # is_training = generator.use_test_kwargs
-                # generator.eval()  
-                plist = []
-                angle_positions = [(i/8, 0.5) for i in range(8)] 
-                ztest = zdist.sample((batch_size,))
-                label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
+                with torch.no_grad():  # 採樣時不需要梯度
+                    plist = []
+                    angle_positions = [(i/8, 0.5) for i in range(8)]
+                    ztest = zdist.sample((batch_size,))
+                    label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
 
-                # save_dir = os.path.join(out_dir, 'poses')
-                # os.makedirs(save_dir, exist_ok=True)
+                    for i, (u, v) in enumerate(angle_positions):
+                        poses = generator.sample_select_pose(u ,v)
+                        plist.append(poses)
+                    ptest = torch.stack(plist)
 
-                for i, (u, v) in enumerate(angle_positions):
-                    # print(f"指定角度:{u}, 轉換後角度:{position_angle}")
-                    poses = generator.sample_select_pose(u ,v)
-                    plist.append(poses)
-                ptest = torch.stack(plist)
+                    rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
 
-                rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
-        
-                wandb.log({
-                    "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
-                    "sample/depth": [wandb.Image(depth, caption=f"Depth at iter {it}")],
-                    "sample/acc": [wandb.Image(acc, caption=f"Acc at iter {it}")],
-                    # "visualization/coordinate_system": wandb.Image(coordinate_viz_path, caption=f"座標系統 {it}"),
-                    "epoch_idx": epoch_idx,
-                    "iteration": it
-                })
+                    wandb.log({
+                        "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
+                        "sample/depth": [wandb.Image(depth, caption=f"Depth at iter {it}")],
+                        "sample/acc": [wandb.Image(acc, caption=f"Acc at iter {it}")],
+                        "epoch_idx": epoch_idx,
+                        "iteration": it
+                    })
+
+                    # 釋放採樣相關的張量
+                    del ztest, label_test, plist, ptest, rgb, depth, acc
+                    torch.cuda.empty_cache()  # 清理 CUDA 緩存
 
              # (v) Compute fid if necessary
             if fid_every > 0 and ((it + 1) % fid_every) == 0:
-                fid, kid = evaluator.compute_fid_kid(label)
-                wandb.log({
-                        "validation/fid": fid,
-                        "validation/kid": kid,
-                        "iteration": it
-                    })
+                with torch.no_grad():  # FID 計算時不需要梯度
+                    fid, kid = evaluator.compute_fid_kid(label)
+                    wandb.log({
+                            "validation/fid": fid,
+                            "validation/kid": kid,
+                            "iteration": it
+                        })
+
+                    # save best model
+                    if save_best == 'fid' and fid < fid_best:
+                        fid_best = fid
+                        print('Saving best model based on FID...')
+                        wandb.run.summary["best_fid"] = fid_best
+                        checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
+
+                    elif save_best == 'kid' and kid < kid_best:
+                        kid_best = kid
+                        print('Saving best model based on KID...')
+                        wandb.run.summary["best_kid"] = kid_best
+                        checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
+
+                # 清理記憶體
                 torch.cuda.empty_cache()
-                # save best model
-                if save_best == 'fid' and fid < fid_best:
-                    fid_best = fid
-                    print('Saving best model based on FID...')
-                    wandb.run.summary["best_fid"] = fid_best  # 更新 summary
-                    checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
-                    # logger.save_stats('stats_best.p')
-                    torch.cuda.empty_cache()
-                
-                elif save_best == 'kid' and kid < kid_best:
-                    kid_best = kid
-                    print('Saving best model based on KID...')
-                    wandb.run.summary["best_kid"] = kid_best  # 更新 summary
-                    checkpoint_io.save('model_best.pt', it=it, epoch_idx=epoch_idx, fid_best=fid_best, kid_best=kid_best, save_to_wandb=True)
-                    # logger.save_stats('stats_best.p')
-                    torch.cuda.empty_cache()
+                gc.collect()  # Python 垃圾回收
 
             # (i) Backup if necessary
             if ((it + 1) % 10000) == 0:
