@@ -119,7 +119,7 @@ if __name__ == '__main__':
     epoch_idx = load_dict.get('epoch_idx', -1)
 
     def create_labels(num_samples, label_value):
-        return torch.full((num_samples, 1), label_value)
+        return torch.full((num_samples, 1), label_value, device=device)
     
     if args.create_sample:
         with torch.no_grad():  # 評估模式不需要梯度

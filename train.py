@@ -176,6 +176,10 @@ def main():
         for x_real, label in tqdm(train_loader, desc=f"Epoch {epoch_idx}"):
             it += 1
 
+            # 將數據移到 GPU（在循環開始時統一處理）
+            x_real = x_real.to(device, non_blocking=True)
+            label = label.to(device, non_blocking=True)
+
             # 準備標籤數據
             first_label = label[:,0].long()
             batch_size = first_label.size(0)
@@ -193,7 +197,6 @@ def main():
             # Discriminator updates
             d_optimizer.zero_grad(set_to_none=True)  # set_to_none=True 節省記憶體
 
-            x_real = x_real.to(device, non_blocking=True)
             rgbs = img_to_patch(x_real)
             rgbs.requires_grad_(True)
 
@@ -202,7 +205,7 @@ def main():
             # 使用混合精度進行前向傳播
             with torch.cuda.amp.autocast(enabled=use_amp):
                 #real data
-                d_real, label_real = discriminator(rgbs, label.to(device, non_blocking=True))
+                d_real, label_real = discriminator(rgbs, label)
                 dloss_real = compute_loss(d_real, 1)
 
             # 梯度計算必須在 FP32 中進行
@@ -211,10 +214,10 @@ def main():
             with torch.cuda.amp.autocast(enabled=use_amp):
                 #fake data
                 with torch.no_grad():
-                    x_fake, _ = generator(z, label.to(device, non_blocking=True))
+                    x_fake, _ = generator(z, label)
                 x_fake.requires_grad_()
 
-                d_fake, _ = discriminator(x_fake, label.to(device, non_blocking=True))
+                d_fake, _ = discriminator(x_fake, label)
                 dloss_fake = compute_loss(d_fake, 0)
 
                 # 計算總損失
@@ -243,8 +246,8 @@ def main():
 
             # 使用混合精度進行前向傳播
             with torch.cuda.amp.autocast(enabled=use_amp):
-                x_fake, _, ccsr_output = generator(z, label.to(device, non_blocking=True), return_ccsr_output=True)
-                d_fake, label_fake = discriminator(x_fake, label.to(device, non_blocking=True))
+                x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
+                d_fake, label_fake = discriminator(x_fake, label)
 
                 gloss = compute_loss(d_fake, 1)
                 ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
@@ -285,14 +288,14 @@ def main():
                     plist = []
                     angle_positions = [(i/8, 0.5) for i in range(8)]
                     ztest = zdist.sample((batch_size,))
-                    label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)])
+                    label_test = torch.tensor([[0] if i < 4 else [0] for i in range(batch_size)], device=device)
 
                     for i, (u, v) in enumerate(angle_positions):
                         poses = generator.sample_select_pose(u ,v)
                         plist.append(poses)
                     ptest = torch.stack(plist)
 
-                    rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
+                    rgb, depth, acc = evaluator.create_samples(ztest, label_test, ptest)
 
                     wandb.log({
                         "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
