@@ -49,8 +49,7 @@ def initialize_training(config, device):
         sampler=None,
         drop_last=True,
         prefetch_factor=2 if config['training']['nworkers'] > 0 else None,  # 預取因子
-        persistent_workers=config['training']['nworkers'] > 0,  # 持久化 workers
-        generator=torch.Generator(device='cuda:0')
+        persistent_workers=config['training']['nworkers'] > 0  # 持久化 workers
     )
     
     # Create models

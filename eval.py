@@ -84,8 +84,7 @@ if __name__ == '__main__':
                 val_dataset,
                 batch_size=batch_size,
                 num_workers=config['training']['nworkers'],
-                shuffle=True, pin_memory=False, sampler=None, drop_last=False,   # enable shuffle for fid/kid computation
-                generator=torch.Generator(device='cuda:0')
+                shuffle=True, pin_memory=False, sampler=None, drop_last=False   # enable shuffle for fid/kid computation
         )
 
     # Create models
@@ -241,8 +240,7 @@ if __name__ == '__main__':
                 samples,
                 batch_size=evaluator.batch_size,
                 num_workers=min(config['training']['nworkers'], 4),
-                shuffle=False, pin_memory=False, sampler=None, drop_last=False,
-                generator=torch.Generator(device='cuda:0')
+                shuffle=False, pin_memory=False, sampler=None, drop_last=False
             )
             fid, kid = evaluator.compute_fid_kid(label, sample_loader)
 
