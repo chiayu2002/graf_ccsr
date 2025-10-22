@@ -17,7 +17,9 @@ class ImgToPatch(object):
             if selected_idcs is not None:
                 rgbs_i = img_i.flatten(1, 2).t()[selected_idcs]
             else:
-                rgbs_i = torch.nn.functional.grid_sample(img_i.unsqueeze(0), 
+                # 確保 pixels_i 與 img_i 在同一設備
+                pixels_i = pixels_i.to(img_i.device)
+                rgbs_i = torch.nn.functional.grid_sample(img_i.unsqueeze(0),
                                      pixels_i.unsqueeze(0), mode='bilinear', align_corners=True)[0]
                 rgbs_i = rgbs_i.flatten(1, 2).t()
             rgbs.append(rgbs_i)
@@ -54,9 +56,11 @@ class RaySampler(object): #生成相機射線
             hw = torch.stack([h,w]).t()
 
         else:
-            rays_o = torch.nn.functional.grid_sample(rays_o.permute(2,0,1).unsqueeze(0), 
+            # 確保 select_inds 與 rays 在同一設備
+            select_inds = select_inds.to(rays_o.device)
+            rays_o = torch.nn.functional.grid_sample(rays_o.permute(2,0,1).unsqueeze(0),
                                  select_inds.unsqueeze(0), mode='bilinear', align_corners=True)[0]
-            rays_d = torch.nn.functional.grid_sample(rays_d.permute(2,0,1).unsqueeze(0), 
+            rays_d = torch.nn.functional.grid_sample(rays_d.permute(2,0,1).unsqueeze(0),
                                  select_inds.unsqueeze(0), mode='bilinear', align_corners=True)[0]
             rays_o = rays_o.permute(1,2,0).view(-1, 3)
             rays_d = rays_d.permute(1,2,0).view(-1, 3)
