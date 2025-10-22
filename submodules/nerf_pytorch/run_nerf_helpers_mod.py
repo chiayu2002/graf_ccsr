@@ -120,6 +120,8 @@ class NeRF(nn.Module):
         label_embedding = label_embedding.repeat(repeat_times, 1)
 
         input_o, input_shape = torch.split(input_pts, [63, 256], dim=-1)
+        # 確保 label_embedding 與 input_shape 在同一設備（用於元素乘法）
+        label_embedding = label_embedding.to(input_shape.device)
         conditioned_shape = input_shape * label_embedding
         h = torch.cat([input_o, conditioned_shape],dim=-1)
         for i, l in enumerate(self.pts_linears):
