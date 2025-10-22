@@ -110,7 +110,11 @@ class NeRF(nn.Module):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1) #torch.Size([65536, 319]),torch.Size([65536, 27])
         h = input_pts
 
-        label = label.long().to(input_pts.device)
+        # 確保 label 在正確的設備上（與 embedding 層相同）
+        label = label.long()
+        embedding_device = next(self.condition_embedding.parameters()).device
+        label = label.to(embedding_device)
+
         label_embedding = self.condition_embedding(label)
         repeat_times = h.shape[0] // label_embedding.shape[0]
         label_embedding = label_embedding.repeat(repeat_times, 1)
