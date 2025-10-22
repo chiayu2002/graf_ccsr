@@ -180,8 +180,8 @@ def main():
             x_real = x_real.to(device, non_blocking=True)
             label = label.to(device, non_blocking=True)
 
-            # 準備標籤數據
-            first_label = label[:,0].long()
+            # 準備標籤數據（確保所有張量都在 GPU 上）
+            first_label = label[:,0].long()  # 繼承 label 的設備
             batch_size = first_label.size(0)
             one_hot = torch.zeros(batch_size, 1, device=device)
             one_hot.scatter_(1, first_label.unsqueeze(1), 1)
