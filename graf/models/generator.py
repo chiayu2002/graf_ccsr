@@ -13,7 +13,8 @@ import pickle
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
+                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False,
+                 use_ccsr=True, num_views=8, use_esrgan=True, esrgan_path=None, num_rrdb_blocks=23):
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -30,8 +31,16 @@ class Generator(object):
         if self.use_ccsr:
             # 假設低分辨率圖像尺寸為原圖的1/4
             lr_height, lr_width = H // 4, W // 4
-            self.ccsr = CCSR(num_views, lr_height, lr_width, scale_factor=4).to(device)
-            
+            self.ccsr = CCSR(
+                num_views=num_views,
+                lr_height=lr_height,
+                lr_width=lr_width,
+                scale_factor=4,
+                use_esrgan=use_esrgan,
+                esrgan_path=esrgan_path,
+                num_rrdb_blocks=num_rrdb_blocks
+            ).to(device)
+
             # 將CCSR參數加入到優化器參數列表中
             self._parameters = parameters + list(self.ccsr.parameters())
             self._named_parameters = named_parameters + list(self.ccsr.named_parameters())
