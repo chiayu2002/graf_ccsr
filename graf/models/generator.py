@@ -181,51 +181,7 @@ class Generator(object):
         RT = torch.Tensor(RT.astype(np.float32))
         
         return RT
-    
-    def get_canonical_poses(self):
-        """
-        返回固定世界座標上的一組標準相機姿勢。
-        這些作為世界座標系統的參考點。
-        
-        返回：
-            標準姿勢的字典
-        """
-        canonical_poses = {
-            "front": self.sample_select_pose(0.0, 0.5),    # 0°（前）
-            "right": self.sample_select_pose(0.25, 0.5),   # 90°（右）
-            "back": self.sample_select_pose(0.5, 0.5),     # 180°（後）
-            "left": self.sample_select_pose(0.75, 0.5),    # 270°（左）
-            "top": self.sample_select_pose(0.0, 0.0),      # 頂視圖
-            "bottom": self.sample_select_pose(0.0, 1.0)    # 底視圖
-        }
-        return canonical_poses
-    
-    def initialize_world_coordinates(self):
-        """
-        初始化並驗證固定的世界座標系統。
-        應該在訓練開始時調用一次。
-        """
-        # 獲取標準視圖
-        canonical_poses = self.get_canonical_poses()
-        
-        # 確保原點在 (0,0,0)
-        origin = torch.zeros(3, device=self.device)
-        
-        # 在場景中創建視覺標記來表示世界軸
-        # 這僅用於調試/可視化目的
-        self.world_axes = {
-            "x": torch.tensor([1.0, 0.0, 0.0], device=self.device),
-            "y": torch.tensor([0.0, 1.0, 0.0], device=self.device),
-            "z": torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        }
-        
-        print("世界座標系統已初始化。")
-        print(f"原點: {origin}")
-        print(f"前視圖位置: {canonical_poses['front'][:3, 3]}")
-        
-        return canonical_poses
-
-    
+  
     def sample_rays(self):   #設train用的rays
         pose = self.sample_pose()
         # print(f"`trainpose`:{pose}")

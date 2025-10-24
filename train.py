@@ -18,7 +18,6 @@ from graf.config import get_data, build_models, load_config, save_config, build_
 from graf.utils import get_zdist
 from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss, CCSRNeRFLoss
 from graf.transforms import ImgToPatch
-# from graf.models.vit_model import ViewConsistencyTransformer
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
@@ -100,6 +99,7 @@ def main():
     train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead 
 
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
+    mce_loss = MCE_Loss()
 
     file_path = os.path.join(out_dir, "model_architecture.txt")
     with open(file_path, 'w') as f:
@@ -165,7 +165,7 @@ def main():
         for x_real, label in tqdm(train_loader, desc=f"Epoch {epoch_idx}"):
             it += 1
 
-            mce_loss = MCE_Loss()
+            
             first_label = label[:,0]
             first_label = first_label.long()
             batch_size = first_label.size(0)
@@ -194,7 +194,7 @@ def main():
             # output1 = discriminator(rgbs, label)
             # d_real = dhead(output1)
             dloss_real = compute_loss(d_real, 1)
-            one_hot = one_hot.to(label_real.device)
+            # one_hot = one_hot.to(label_real.device)
             # d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
             # dloss_real.backward(retain_graph=True)

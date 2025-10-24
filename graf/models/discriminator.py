@@ -112,30 +112,3 @@ class Discriminator(nn.Module):
 
         return out, class_pred
         # return features
-
-# class DHead(nn.Module):
-#     def __init__(self, ndf=64):
-#         super().__init__()
-
-#         self.conv = nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False)
-
-#     def forward(self, x):
-#         output = self.conv(x)
-
-#         return output
-
-# class QHead(nn.Module):
-#     def __init__(self, ndf=64):
-#         super().__init__()
-
-#         self.conv1 = nn.Conv2d(ndf * 8, 128, 4, bias=False)
-#         self.bn1 = nn.BatchNorm2d(128)
-
-#         self.conv_disc = nn.Conv2d(128, 2, 1)
-
-#     def forward(self, x):
-#         x = F.leaky_relu(self.bn1(self.conv1(x)), 0.2, inplace=True)
-
-#         disc_logits = self.conv_disc(x).squeeze()
-
-#         return disc_logits
