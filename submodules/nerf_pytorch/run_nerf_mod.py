@@ -43,6 +43,8 @@ def run_network(inputs, viewdirs, fn, label, embed_fn, embeddirs_fn, features=No
         # features_shape = features[:, :-feat_dim_appearance]
         # features_appearance = features[:, -feat_dim_appearance:]
 
+        # 確保 features_shape 與 embedded 在同一設備
+        features_shape = features_shape.to(embedded.device)
         embedded = torch.cat([embedded, features_shape], -1)
         # print(f"features: {features_shape}")  319
 
@@ -50,6 +52,8 @@ def run_network(inputs, viewdirs, fn, label, embed_fn, embeddirs_fn, features=No
         input_dirs = viewdirs[:,None].expand(inputs.shape) #8192 64 3
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])  #524288 3
         embedded_dirs = embeddirs_fn(input_dirs_flat) #524288 27
+        # 確保 embedded_dirs 與 embedded 在同一設備
+        embedded_dirs = embedded_dirs.to(embedded.device)
         embedded = torch.cat([embedded, embedded_dirs], -1)  #524288 346
         # if features_appearance is not None:
         #     features_appearance = features_appearance[:embedded.shape[0], :]
@@ -193,24 +197,27 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, pytest=False):
     raw2alpha = lambda raw, dists, act_fn=relu: 1.-torch.exp(-act_fn(raw)*dists)
 
     dists = z_vals[...,1:] - z_vals[...,:-1] #採樣點之間的距離
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
+    # 確保常數張量與 dists 在同一設備
+    inf_tensor = torch.tensor([1e10], device=dists.device, dtype=dists.dtype).expand(dists[...,:1].shape)
+    dists = torch.cat([dists, inf_tensor], -1)  # [N_rays, N_samples]
 
     dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
     rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
     noise = 0.
     if raw_noise_std > 0.:
-        noise = torch.randn(raw[...,3].shape) * raw_noise_std
+        noise = torch.randn(raw[...,3].shape, device=raw.device, dtype=raw.dtype) * raw_noise_std
 
         # Overwrite randomly sampled data if pytest
         if pytest:
             np.random.seed(0)
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
-            noise = torch.Tensor(noise)
+            noise = torch.tensor(noise, device=raw.device, dtype=raw.dtype)
 
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+    ones_tensor = torch.ones((alpha.shape[0], 1), device=alpha.device, dtype=alpha.dtype)
+    weights = alpha * torch.cumprod(torch.cat([ones_tensor, 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1)
@@ -254,13 +261,13 @@ def render_rays(ray_batch,
         upper = torch.cat([mids, z_vals[...,-1:]], -1)
         lower = torch.cat([z_vals[...,:1], mids], -1)
         # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
+        t_rand = torch.rand(z_vals.shape, device=z_vals.device, dtype=z_vals.dtype)
 
         # Pytest, overwrite u with numpy's fixed random numbers
         if pytest:
             np.random.seed(0)
             t_rand = np.random.rand(*list(z_vals.shape))
-            t_rand = torch.Tensor(t_rand)
+            t_rand = torch.tensor(t_rand, device=z_vals.device, dtype=z_vals.dtype)
 
         z_vals = lower + (upper - lower) * t_rand
 

@@ -102,8 +102,11 @@ def build_models(config, disc=True):
                           orthographic=config['data']['orthographic'],
                           v=config['data']['v'],
                           use_default_rays=config['data']['use_default_rays'],
-                          use_ccsr=True,  # 啟用CCSR
-                          num_views=8
+                          use_ccsr=config.get('ccsr', {}).get('enabled', True),  # 啟用CCSR
+                          num_views=config.get('ccsr', {}).get('num_views', 8),
+                          use_esrgan=config.get('ccsr', {}).get('use_esrgan', True),  # 使用 ESRGAN
+                          esrgan_path=config.get('ccsr', {}).get('esrgan_path', None),  # ESRGAN 預訓練模型路徑
+                          num_rrdb_blocks=config.get('ccsr', {}).get('num_rrdb_blocks', 23)  # RRDB 塊數量
                           )
     
     discriminator = None

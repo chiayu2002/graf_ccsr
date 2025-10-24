@@ -13,7 +13,8 @@ import pickle
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
+                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False,
+                 use_ccsr=True, num_views=8, use_esrgan=True, esrgan_path=None, num_rrdb_blocks=23):
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -30,8 +31,16 @@ class Generator(object):
         if self.use_ccsr:
             # 假設低分辨率圖像尺寸為原圖的1/4
             lr_height, lr_width = H // 4, W // 4
-            self.ccsr = CCSR(num_views, lr_height, lr_width, scale_factor=4).to(device)
-            
+            self.ccsr = CCSR(
+                num_views=num_views,
+                lr_height=lr_height,
+                lr_width=lr_width,
+                scale_factor=4,
+                use_esrgan=use_esrgan,
+                esrgan_path=esrgan_path,
+                num_rrdb_blocks=num_rrdb_blocks
+            ).to(device)
+
             # 將CCSR參數加入到優化器參數列表中
             self._parameters = parameters + list(self.ccsr.parameters())
             self._named_parameters = named_parameters + list(self.ccsr.named_parameters())
@@ -109,36 +118,48 @@ class Generator(object):
         rgb = rays_to_output(rgb)
 
         # 如果啟用CCSR並且需要返回CCSR輸出
-        ccsr_output = None
         if self.use_ccsr and return_ccsr_output:
-            # 將NeRF輸出轉換為圖像格式進行CCSR處理
-            # 這裡需要根據您的patch採樣方式調整
-            total_elements = rgb.numel()
-            rgb_nerf = rgb.view(bs, total_elements // (bs * 3), 3)
-            nerf_images = rgb_nerf.view(bs, int(np.sqrt(rgb_nerf.shape[1])), int(np.sqrt(rgb_nerf.shape[1])), 3).permute(0, 3, 1, 2)
-            
-            # 生成低分辨率版本
-            patch_size = 32
-            lr_size = max(8, patch_size // 4)
-            lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size), mode='bilinear', align_corners=False)
-            
-            # 對每個樣本應用CCSR
-            ccsr_results = []
-            for i in range(bs):
-                # 使用label中的信息確定視角索引
-                # view_idx = int(label[i, 2].item()) if label.shape[1] > 2 else i
-                view_idx = 72
-                ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
-                ccsr_results.append(ccsr_result)
-            
-            ccsr_combined  = torch.cat(ccsr_results, dim=0)
-            ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size), 
-                                       mode='bilinear', align_corners=False)
-            # 轉換為與NeRF輸出相同的格式
-            ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
+            with torch.no_grad():  # CCSR 處理時暫時不需要梯度
+                # 將NeRF輸出轉換為圖像格式進行CCSR處理
+                total_elements = rgb.numel()
+                rgb_nerf = rgb.view(bs, total_elements // (bs * 3), 3)
 
-        if return_ccsr_output:
+                # 驗證尺寸是否為完美平方數
+                num_pixels = rgb_nerf.shape[1]
+                patch_size = int(np.sqrt(num_pixels))
+                assert patch_size * patch_size == num_pixels, f"patch採樣數量 {num_pixels} 不是完美平方數"
+
+                nerf_images = rgb_nerf.view(bs, patch_size, patch_size, 3).permute(0, 3, 1, 2)
+
+                # 生成低分辨率版本
+                lr_size = max(8, patch_size // 4)
+                lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size),
+                                         mode='bilinear', align_corners=False)
+
+                # 對每個樣本應用CCSR（批次處理以節省記憶體）
+                ccsr_results = []
+                for i in range(bs):
+                    # 從 label 提取正確的視角索引
+                    if label.shape[1] > 2:
+                        angle_idx = int(label[i, 2].item())  # 0-359
+                        view_idx = (angle_idx * self.ccsr.cclc.num_views) // 360  # 映射到 0-7
+                    else:
+                        view_idx = i % self.ccsr.cclc.num_views
+
+                    ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
+                    ccsr_results.append(ccsr_result)
+
+                ccsr_combined = torch.cat(ccsr_results, dim=0)
+                del ccsr_results, lr_images  # 釋放中間結果
+
+                ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size),
+                                           mode='bilinear', align_corners=False)
+                del ccsr_combined  # 釋放
+
+            # 重新啟用梯度並轉換格式
             ccsr_output = ccsr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
+            ccsr_output.requires_grad_(True)  # 確保可以計算梯度
+
             return rgb, rays, ccsr_output
         else:
             return rgb, rays
