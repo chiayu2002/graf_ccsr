@@ -26,22 +26,8 @@ class Generator(object):
         self.use_default_rays = use_default_rays
         self.use_ccsr = use_ccsr
 
-        # 添加CCSR模組
-        if self.use_ccsr:
-            # 假設低分辨率圖像尺寸為原圖的1/4
-            lr_height, lr_width = H // 4, W // 4
-            self.ccsr = CCSR(num_views, lr_height, lr_width, scale_factor=4).to(device)
-            
-            # 將CCSR參數加入到優化器參數列表中
-            self._parameters = parameters + list(self.ccsr.parameters())
-            self._named_parameters = named_parameters + list(self.ccsr.named_parameters())
-        else:
-            self._parameters = parameters
-            self._named_parameters = named_parameters
-
         coords = torch.from_numpy(np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), -1))
         self.coords = coords.view(-1, 2)
-        self.initial_direction = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
 
         self.ray_sampler = ray_sampler   #FlexGridRaySampler
         self.val_ray_sampler = FullRaySampler(orthographic=orthographic)
@@ -51,21 +37,27 @@ class Generator(object):
         self._parameters = parameters
         self._named_parameters = named_parameters
         self.module_dict = {'generator': self.render_kwargs_train['network_fn']}
+        for name, module in [('generator_fine', self.render_kwargs_train['network_fine'])]:
+            if module is not None:
+                self.module_dict[name] = module
 
-        # 添加CCSR到module_dict
+        # 添加CCSR模組
         if self.use_ccsr:
+            # 假設低分辨率圖像尺寸為原圖的1/4
+            lr_height, lr_width = H // 4, W // 4
+            self.ccsr = CCSR(num_views=num_views, lr_height=lr_height, lr_width=lr_width, scale_factor=4).to(device)
             self.module_dict['ccsr'] = self.ccsr
-        
-        for k, v in self.module_dict.items():
-            if k in ['generator']:
-                continue       # parameters already included
-            self._parameters += list(v.parameters())
-            self._named_parameters += list(v.named_parameters())
-        
-        self.parameters = lambda: self._parameters           # save as function to enable calling model.parameters()
-        self.named_parameters = lambda: self._named_parameters           # save as function to enable calling model.named_parameters()
-        self.use_test_kwargs = False
+            
+        for name, module in self.module_dict.items():
+            if name in ['generator', 'generator_fine']:
+                continue
+            self._parameters += list(module.parameters())
+            self._named_parameters += list(module.named_parameters())    
 
+        self.parameters = lambda: self._parameters
+        self.named_parameters = lambda: self._named_parameters
+
+        self.use_test_kwargs = False
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
     def __call__(self, z, label, rays=None, return_ccsr_output=False):
@@ -118,7 +110,7 @@ class Generator(object):
             nerf_images = rgb_nerf.view(bs, int(np.sqrt(rgb_nerf.shape[1])), int(np.sqrt(rgb_nerf.shape[1])), 3).permute(0, 3, 1, 2)
             
             # 生成低分辨率版本
-            patch_size = 32
+            patch_size = 64
             lr_size = max(8, patch_size // 4)
             lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size), mode='bilinear', align_corners=False)
             
@@ -127,15 +119,19 @@ class Generator(object):
             for i in range(bs):
                 # 使用label中的信息確定視角索引
                 # view_idx = int(label[i, 2].item()) if label.shape[1] > 2 else i
-                view_idx = 72
+                angle_idx = int(label[i, 2].item())
+                # 將 360 個角度映射到 8 個視角
+                view_idx = (angle_idx * 8) // 360  # 0-7 的範圍
                 ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
+                # view_idx = 72
+                # ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
                 ccsr_results.append(ccsr_result)
             
             ccsr_combined  = torch.cat(ccsr_results, dim=0)
             ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size), 
                                        mode='bilinear', align_corners=False)
             # 轉換為與NeRF輸出相同的格式
-            ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
+            # ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
 
         if return_ccsr_output:
             ccsr_output = ccsr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)

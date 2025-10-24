@@ -103,7 +103,7 @@ class CCSR(nn.Module):
         super().__init__()
         
         self.scale_factor = scale_factor
-        self.cclc = ConsistencyControllingLatentCode(num_views, lr_height, lr_width, scale_factor)
+        self.cclc = ConsistencyControllingLatentCode(num_views, 64, 64, 1)
         self.cem = ConsistencyEnforcingModule()
         
         # 簡化的超分辨率網絡

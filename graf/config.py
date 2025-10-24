@@ -110,7 +110,7 @@ def build_models(config, disc=True):
     if disc:
         disc_kwargs = {'nc': 3,       # channels for patch discriminator
                        'ndf': config['discriminator']['ndf'],
-                       'imsize': int(np.sqrt(config['ray_sampler']['N_samples'])),  #int(np.sqrt(config['ray_sampler']['N_samples'])),
+                       'imsize': 64,  #int(np.sqrt(config['ray_sampler']['N_samples'])),
                        'hflip': config['discriminator']['hflip'],
                        'num_classes':config['discriminator']['num_classes']
                         }

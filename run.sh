@@ -1,8 +1,8 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=1:gpu_id=1
+#PBS -l select=1:ncpus=1:gpu_id=2
 #PBS -l place=shared
-#PBS -o output0923_72_kernel.txt				
-#PBS -e error0923_72_kernel.txt				
+#PBS -o output1023_view.txt				
+#PBS -e error1023_view.txt				
 #PBS -N nerf
 cd ~/graf250916										
 

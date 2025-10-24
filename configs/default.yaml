@@ -1,4 +1,4 @@
-expname: column250923_72_kernel
+expname: column251023_view
 data:
   datadir: [data/RS307_n]
   far: 4.5
@@ -36,7 +36,7 @@ nerf:
   netdepth_fine: 8
   netwidth_fine: 256
 ray_sampler:
-  N_samples: 1024 #1024 #4096
+  N_samples: 4096 #1024 #4096
   max_scale: 1.0
   min_scale: 0.25
   scale_anneal: 0.0025
@@ -70,8 +70,8 @@ z_dist:
   # dim_appearance: 128 
   type: gauss
 ccsr: 
-        'enabled': True,
-        'num_views': 8,
-        'scale_factor': 4,
-        'alpha_init': 1.0,
-        'alpha_decay': 0.0001
+    enabled: True,
+    num_views: 8,
+    scale_factor: 4,
+    alpha_init: 1.0,
+    alpha_decay: 0.0001

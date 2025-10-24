@@ -22,7 +22,7 @@ from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
-# os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def setup_directories(config):
     out_dir = os.path.join(config['training']['outdir'], config['expname'])
