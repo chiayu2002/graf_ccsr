@@ -216,6 +216,8 @@ class CCSR_ESRGAN(nn.Module):
     def _load_pretrained_rrdb(self, pretrained_path):
         """從預訓練的 ESRGAN 加載 RRDB trunk 權重"""
         import os
+        import re
+
         if not os.path.exists(pretrained_path):
             print(f"警告: 預訓練模型不存在: {pretrained_path}")
             print("CCSR-ESRGAN 將使用隨機初始化")
@@ -232,30 +234,47 @@ class CCSR_ESRGAN(nn.Module):
             elif 'state_dict' in pretrained_dict:
                 pretrained_dict = pretrained_dict['state_dict']
 
-            # 只加載 RRDB trunk 的權重
             model_dict = self.state_dict()
             pretrained_rrdb = {}
 
             print(f"預訓練模型包含 {len(pretrained_dict)} 個權重")
 
+            # 鍵名映射函數
+            def map_key(old_key):
+                """
+                映射預訓練模型的鍵名到 CCSR-ESRGAN 的鍵名
+
+                格式轉換：
+                model.1.sub.0.RDB1.conv1.0.weight → rrdb_trunk.0.RDB1.conv1.weight
+                model.2.weight → trunk_conv.weight
+                """
+                # 處理 RRDB trunk: model.1.sub.X.RDBX.convX.0.weight
+                # 轉換為: rrdb_trunk.X.RDBX.convX.weight
+                pattern1 = r'^model\.1\.sub\.(\d+)\.(.+)\.0\.(weight|bias)$'
+                match = re.match(pattern1, old_key)
+                if match:
+                    block_id, middle, param = match.groups()
+                    return f'rrdb_trunk.{block_id}.{middle}.{param}'
+
+                # 處理 trunk_conv: model.2.weight → trunk_conv.weight
+                if old_key.startswith('model.2.'):
+                    return old_key.replace('model.2.', 'trunk_conv.')
+
+                # 其他情況保持原樣
+                return None
+
+            # 加載權重
+            matched_count = 0
             for k, v in pretrained_dict.items():
-                # 移除可能的 'model.' 前綴
-                k_clean = k.replace('model.', '')
+                new_k = map_key(k)
 
-                # 匹配 RRDB trunk 的權重
-                if 'RRDB_trunk' in k_clean:
-                    # 將 ESRGAN 的 RRDB_trunk 映射到 CCSR 的 rrdb_trunk
-                    new_k = k_clean.replace('RRDB_trunk', 'rrdb_trunk')
-
-                    if new_k in model_dict:
-                        if model_dict[new_k].shape == v.shape:
-                            pretrained_rrdb[new_k] = v
-
-                # 匹配 trunk_conv
-                elif 'trunk_conv' in k_clean:
-                    if k_clean in model_dict:
-                        if model_dict[k_clean].shape == v.shape:
-                            pretrained_rrdb[k_clean] = v
+                if new_k and new_k in model_dict:
+                    if model_dict[new_k].shape == v.shape:
+                        pretrained_rrdb[new_k] = v
+                        matched_count += 1
+                    else:
+                        print(f"⚠️  形狀不匹配: {new_k}")
+                        print(f"    預訓練: {v.shape} vs 模型: {model_dict[new_k].shape}")
 
             if pretrained_rrdb:
                 model_dict.update(pretrained_rrdb)
@@ -269,7 +288,9 @@ class CCSR_ESRGAN(nn.Module):
                 print(f"  - trunk_conv: {trunk_conv_count} 個權重")
             else:
                 print("❌ 未找到匹配的 RRDB 權重，使用隨機初始化")
-                print("   提示: 請運行 'python diagnose_esrgan.py' 檢查預訓練模型")
+                print("   提示: 預訓練模型鍵名格式:")
+                print(f"   示例: {list(pretrained_dict.keys())[0]}")
+                print("   運行 'python diagnose_esrgan.py' 查看詳細信息")
 
         except Exception as e:
             print(f"❌ 加載預訓練權重失敗: {e}")
