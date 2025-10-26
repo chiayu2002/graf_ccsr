@@ -236,31 +236,46 @@ class CCSR_ESRGAN(nn.Module):
             model_dict = self.state_dict()
             pretrained_rrdb = {}
 
-            for k, v in pretrained_dict.items():
-                # 匹配 RRDB trunk 的權重
-                if 'RRDB_trunk' in k:
-                    # 將 ESRGAN 的權重鍵名映射到當前模型
-                    # ESRGAN: model.RRDB_trunk.0.xxx -> CCSR: rrdb_trunk.0.xxx
-                    new_k = k.replace('model.RRDB_trunk', 'rrdb_trunk')
-                    new_k = new_k.replace('RRDB_trunk', 'rrdb_trunk')
-                    if new_k in model_dict and model_dict[new_k].shape == v.shape:
-                        pretrained_rrdb[new_k] = v
+            print(f"預訓練模型包含 {len(pretrained_dict)} 個權重")
 
-                # trunk_conv
-                if 'trunk_conv' in k:
-                    if k in model_dict and model_dict[k].shape == v.shape:
-                        pretrained_rrdb[k] = v
+            for k, v in pretrained_dict.items():
+                # 移除可能的 'model.' 前綴
+                k_clean = k.replace('model.', '')
+
+                # 匹配 RRDB trunk 的權重
+                if 'RRDB_trunk' in k_clean:
+                    # 將 ESRGAN 的 RRDB_trunk 映射到 CCSR 的 rrdb_trunk
+                    new_k = k_clean.replace('RRDB_trunk', 'rrdb_trunk')
+
+                    if new_k in model_dict:
+                        if model_dict[new_k].shape == v.shape:
+                            pretrained_rrdb[new_k] = v
+
+                # 匹配 trunk_conv
+                elif 'trunk_conv' in k_clean:
+                    if k_clean in model_dict:
+                        if model_dict[k_clean].shape == v.shape:
+                            pretrained_rrdb[k_clean] = v
 
             if pretrained_rrdb:
                 model_dict.update(pretrained_rrdb)
                 self.load_state_dict(model_dict, strict=False)
-                print(f"成功加載 {len(pretrained_rrdb)} 個預訓練 RRDB 權重")
+                print(f"✓ 成功加載 {len(pretrained_rrdb)} 個預訓練 RRDB 權重")
+
+                # 統計加載的權重
+                rrdb_count = sum(1 for k in pretrained_rrdb.keys() if 'rrdb_trunk' in k)
+                trunk_conv_count = sum(1 for k in pretrained_rrdb.keys() if 'trunk_conv' in k)
+                print(f"  - RRDB blocks: {rrdb_count} 個權重")
+                print(f"  - trunk_conv: {trunk_conv_count} 個權重")
             else:
-                print("未找到匹配的 RRDB 權重，使用隨機初始化")
+                print("❌ 未找到匹配的 RRDB 權重，使用隨機初始化")
+                print("   提示: 請運行 'python diagnose_esrgan.py' 檢查預訓練模型")
 
         except Exception as e:
-            print(f"加載預訓練權重失敗: {e}")
+            print(f"❌ 加載預訓練權重失敗: {e}")
             print("CCSR-ESRGAN 將使用隨機初始化")
+            import traceback
+            traceback.print_exc()
 
     def _freeze_rrdb(self):
         """凍結 RRDB trunk 的參數"""
