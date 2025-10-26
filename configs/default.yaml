@@ -70,17 +70,30 @@ z_dist:
   # dim_appearance: 128
   type: gauss
 
-# 超分辨率模組配置
-# 選項 1: 使用預訓練的 ESRGAN 模型（推薦）
-esrgan:
-  enabled: true  # 啟用 ESRGAN
-  pretrained_path: 'pretrained_models/RRDB_ESRGAN_x4.pth'  # 預訓練模型路徑
-  freeze: true  # 凍結 ESRGAN 參數（推薦）
+# 超分辨率模組配置（三選一）
+
+# 選項 1: CCSR-ESRGAN 混合模型（最推薦）
+# 結合 CCSR 的多視角一致性 + ESRGAN 的強大超分辨率
+ccsr_esrgan:
+  enabled: true  # 啟用 CCSR-ESRGAN
+  num_views: 8  # 視角數量
+  num_rrdb_blocks: 16  # RRDB blocks 數量（16=快速, 23=完整）
+  nf: 64  # 特徵圖通道數
+  gc: 32  # RRDB growth channel
+  pretrained_path: 'pretrained_models/RRDB_ESRGAN_x4.pth'  # ESRGAN 預訓練權重
+  freeze_rrdb: true  # 凍結 RRDB trunk（推薦，只訓練 CCLC 和 CEM）
   scale_factor: 4
 
-# 選項 2: 使用自定義 CCSR 模組（如果 esrgan.enabled=false）
+# 選項 2: 獨立 ESRGAN 模型
+esrgan:
+  enabled: false  # 如果使用 CCSR-ESRGAN，設為 false
+  pretrained_path: 'pretrained_models/RRDB_ESRGAN_x4.pth'
+  freeze: true
+  scale_factor: 4
+
+# 選項 3: 簡單 CCSR 模組
 ccsr:
-  enabled: false  # 如果使用 ESRGAN，設為 false
+  enabled: false  # 如果使用其他模型，設為 false
   num_views: 8
   scale_factor: 4
   alpha_init: 1.0

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+from graf.models.esrgan_model import RRDB
 
 
 class ConsistencyControllingLatentCode(nn.Module):
@@ -97,19 +98,19 @@ class ConsistencyEnforcingModule(nn.Module):
     
 
 class CCSR(nn.Module):
-    """一致性控制超分辨率模組"""
-    
+    """一致性控制超分辨率模組（簡化版）"""
+
     def __init__(self, num_views: int, lr_height: int, lr_width: int, scale_factor: int = 4):
         super().__init__()
-        
+
         self.scale_factor = scale_factor
         self.cclc = ConsistencyControllingLatentCode(num_views, 64, 64, 1)
         self.cem = ConsistencyEnforcingModule()
-        
+
         # 簡化的超分辨率網絡
         self.sr_network = self._build_sr_network(scale_factor)
         self.activation = nn.LeakyReLU(0.2)
-        
+
     def _build_sr_network(self, scale_factor: int) -> nn.Module:
         """構建超分辨率網絡"""
         return nn.Sequential(
@@ -122,27 +123,204 @@ class CCSR(nn.Module):
             nn.Conv2d(64, 3 * scale_factor * scale_factor, 3, padding=1),
             nn.PixelShuffle(scale_factor)
         )
-    
+
     def forward(self, lr_image: torch.Tensor, view_idx: int) -> torch.Tensor:
         """CCSR前向傳播"""
         batch_size = lr_image.shape[0]
-        
+
         # 獲取潛在代碼
         latent_code = self.cclc(view_idx)
         latent_code = latent_code.unsqueeze(0).expand(batch_size, -1, -1, -1)
-        
+
         # 上採樣低分辨率圖像
         lr_upsampled = F.interpolate(lr_image, size=latent_code.shape[-2:], mode='bilinear', align_corners=False)
-        
+
         # 連接輸入
         combined_input = torch.cat([lr_upsampled, latent_code], dim=1)
-        
+
         # 生成超分辨率圖像
         sr_output = self.sr_network(combined_input)
         sr_output = self.activation(sr_output)
         sr_output = torch.clamp(sr_output, -1, 1)  # 匹配GRAF的圖像範圍 [-1, 1]
-        
+
         # 應用CEM
         refined_sr = self.cem(sr_output, lr_image)
-        
+
+        return refined_sr
+
+
+class CCSR_ESRGAN(nn.Module):
+    """
+    一致性控制超分辨率模組 - ESRGAN 版本
+
+    結合 CCSR 的多視角一致性機制和 ESRGAN 的強大超分辨率能力：
+    - CCLC: 為每個視角學習獨特的潛在代碼
+    - ESRGAN RRDB: 強大的超分辨率網絡
+    - CEM: 確保 SR 圖像與 LR 圖像的一致性
+    """
+
+    def __init__(self, num_views: int, lr_height: int, lr_width: int, scale_factor: int = 4,
+                 num_rrdb_blocks: int = 16, nf: int = 64, gc: int = 32,
+                 pretrained_path: str = None, freeze_rrdb: bool = False):
+        """
+        Args:
+            num_views: 視角數量
+            lr_height: 低分辨率圖像高度（不使用，保留接口兼容性）
+            lr_width: 低分辨率圖像寬度（不使用，保留接口兼容性）
+            scale_factor: 上採樣倍率
+            num_rrdb_blocks: RRDB blocks 數量
+            nf: 特徵圖通道數
+            gc: RRDB 的 growth channel
+            pretrained_path: ESRGAN 預訓練權重路徑
+            freeze_rrdb: 是否凍結 RRDB 參數
+        """
+        super().__init__()
+
+        self.scale_factor = scale_factor
+        self.num_views = num_views
+
+        # 1. 多視角潛在代碼 (CCLC)
+        self.cclc = ConsistencyControllingLatentCode(num_views, 64, 64, 1)
+
+        # 2. 融合層：將 LR 圖像(3ch) + 潛在代碼(3ch) 融合為特徵
+        self.fusion_conv = nn.Conv2d(6, nf, 3, 1, 1, bias=True)
+
+        # 3. RRDB Trunk (ESRGAN 核心)
+        self.rrdb_trunk = nn.ModuleList()
+        for _ in range(num_rrdb_blocks):
+            self.rrdb_trunk.append(RRDB(nf, gc))
+
+        self.trunk_conv = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+
+        # 4. 上採樣層 (x4 = 2x upsample twice)
+        self.upconv1 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.upconv2 = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+
+        # 5. 最後的高分辨率卷積
+        self.hrconv = nn.Conv2d(nf, nf, 3, 1, 1, bias=True)
+        self.conv_last = nn.Conv2d(nf, 3, 3, 1, 1, bias=True)
+
+        # 6. 一致性強制模組 (CEM)
+        self.cem = ConsistencyEnforcingModule()
+
+        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+        # 加載預訓練權重（僅 RRDB 部分）
+        if pretrained_path is not None:
+            self._load_pretrained_rrdb(pretrained_path)
+
+        # 凍結 RRDB 參數
+        if freeze_rrdb:
+            self._freeze_rrdb()
+
+    def _load_pretrained_rrdb(self, pretrained_path):
+        """從預訓練的 ESRGAN 加載 RRDB trunk 權重"""
+        import os
+        if not os.path.exists(pretrained_path):
+            print(f"警告: 預訓練模型不存在: {pretrained_path}")
+            print("CCSR-ESRGAN 將使用隨機初始化")
+            return
+
+        try:
+            pretrained_dict = torch.load(pretrained_path, map_location='cpu')
+
+            # 處理不同的權重格式
+            if 'params' in pretrained_dict:
+                pretrained_dict = pretrained_dict['params']
+            elif 'model_state_dict' in pretrained_dict:
+                pretrained_dict = pretrained_dict['model_state_dict']
+            elif 'state_dict' in pretrained_dict:
+                pretrained_dict = pretrained_dict['state_dict']
+
+            # 只加載 RRDB trunk 的權重
+            model_dict = self.state_dict()
+            pretrained_rrdb = {}
+
+            for k, v in pretrained_dict.items():
+                # 匹配 RRDB trunk 的權重
+                if 'RRDB_trunk' in k:
+                    # 將 ESRGAN 的權重鍵名映射到當前模型
+                    # ESRGAN: model.RRDB_trunk.0.xxx -> CCSR: rrdb_trunk.0.xxx
+                    new_k = k.replace('model.RRDB_trunk', 'rrdb_trunk')
+                    new_k = new_k.replace('RRDB_trunk', 'rrdb_trunk')
+                    if new_k in model_dict and model_dict[new_k].shape == v.shape:
+                        pretrained_rrdb[new_k] = v
+
+                # trunk_conv
+                if 'trunk_conv' in k:
+                    if k in model_dict and model_dict[k].shape == v.shape:
+                        pretrained_rrdb[k] = v
+
+            if pretrained_rrdb:
+                model_dict.update(pretrained_rrdb)
+                self.load_state_dict(model_dict, strict=False)
+                print(f"成功加載 {len(pretrained_rrdb)} 個預訓練 RRDB 權重")
+            else:
+                print("未找到匹配的 RRDB 權重，使用隨機初始化")
+
+        except Exception as e:
+            print(f"加載預訓練權重失敗: {e}")
+            print("CCSR-ESRGAN 將使用隨機初始化")
+
+    def _freeze_rrdb(self):
+        """凍結 RRDB trunk 的參數"""
+        for module in self.rrdb_trunk:
+            for param in module.parameters():
+                param.requires_grad = False
+
+        for param in self.trunk_conv.parameters():
+            param.requires_grad = False
+
+        print("RRDB trunk 參數已凍結")
+
+    def forward(self, lr_image: torch.Tensor, view_idx: int) -> torch.Tensor:
+        """
+        Args:
+            lr_image: [B, 3, H, W]，範圍 [-1, 1]
+            view_idx: 視角索引
+
+        Returns:
+            sr_image: [B, 3, H*scale, W*scale]，範圍 [-1, 1]
+        """
+        batch_size = lr_image.shape[0]
+
+        # 1. 獲取視角特定的潛在代碼
+        latent_code = self.cclc(view_idx)
+        latent_code = latent_code.unsqueeze(0).expand(batch_size, -1, -1, -1)
+
+        # 2. 上採樣 LR 圖像到與潛在代碼相同的尺寸
+        lr_upsampled = F.interpolate(lr_image, size=latent_code.shape[-2:],
+                                     mode='bilinear', align_corners=False)
+
+        # 3. 融合 LR 圖像和潛在代碼
+        combined_input = torch.cat([lr_upsampled, latent_code], dim=1)  # [B, 6, H, W]
+
+        # 將輸入從 [-1, 1] 轉換到 [0, 1]（ESRGAN 期望範圍）
+        combined_input = (combined_input + 1) / 2.0
+
+        # 4. 融合卷積
+        fea = self.fusion_conv(combined_input)
+        trunk = fea
+
+        # 5. RRDB trunk
+        for rrdb in self.rrdb_trunk:
+            trunk = rrdb(trunk)
+
+        trunk = self.trunk_conv(trunk)
+        fea = fea + trunk
+
+        # 6. 上採樣 (x4 = 2x + 2x)
+        fea = self.lrelu(self.upconv1(F.interpolate(fea, scale_factor=2, mode='nearest')))
+        fea = self.lrelu(self.upconv2(F.interpolate(fea, scale_factor=2, mode='nearest')))
+
+        # 7. 高分辨率卷積
+        sr_output = self.conv_last(self.lrelu(self.hrconv(fea)))
+
+        # 將輸出從 [0, 1] 轉換回 [-1, 1]
+        sr_output = sr_output * 2.0 - 1.0
+        sr_output = torch.clamp(sr_output, -1, 1)
+
+        # 8. 應用一致性強制模組 (CEM)
+        refined_sr = self.cem(sr_output, lr_image)
+
         return refined_sr

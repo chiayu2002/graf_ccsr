@@ -204,8 +204,9 @@ def main():
             #fake data
             with torch.no_grad():
                 # 檢查是否使用超分辨率
-                use_sr = hasattr(generator, 'use_esrgan') and generator.use_esrgan
-                use_sr = use_sr or (hasattr(generator, 'use_ccsr') and generator.use_ccsr)
+                use_sr = (hasattr(generator, 'use_esrgan') and generator.use_esrgan) or \
+                         (hasattr(generator, 'use_ccsr') and generator.use_ccsr) or \
+                         (hasattr(generator, 'use_ccsr_esrgan') and generator.use_ccsr_esrgan)
 
                 if use_sr:
                     x_fake_nerf, _, x_fake_sr = generator(z, label, return_sr_output=True)
@@ -246,8 +247,9 @@ def main():
             z = zdist.sample((batch_size,))
 
             # 檢查是否使用超分辨率
-            use_sr = hasattr(generator, 'use_esrgan') and generator.use_esrgan
-            use_sr = use_sr or (hasattr(generator, 'use_ccsr') and generator.use_ccsr)
+            use_sr = (hasattr(generator, 'use_esrgan') and generator.use_esrgan) or \
+                     (hasattr(generator, 'use_ccsr') and generator.use_ccsr) or \
+                     (hasattr(generator, 'use_ccsr_esrgan') and generator.use_ccsr_esrgan)
 
             if use_sr:
                 x_fake_nerf, _, x_fake_sr = generator(z, label, return_sr_output=True)
