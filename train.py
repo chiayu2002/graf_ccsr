@@ -203,7 +203,17 @@ def main():
             
             #fake data
             with torch.no_grad():
-                x_fake, _ = generator(z, label)
+                # 檢查是否使用超分辨率
+                use_sr = hasattr(generator, 'use_esrgan') and generator.use_esrgan
+                use_sr = use_sr or (hasattr(generator, 'use_ccsr') and generator.use_ccsr)
+
+                if use_sr:
+                    x_fake_nerf, _, x_fake_sr = generator(z, label, return_sr_output=True)
+                    # 使用超分辨率輸出訓練 Discriminator
+                    x_fake = x_fake_sr
+                else:
+                    x_fake, _ = generator(z, label)
+
             x_fake.requires_grad_()
 
             d_fake, _ = discriminator(x_fake, label)
@@ -215,7 +225,7 @@ def main():
             # reg.backward()
 
             # dloss = dloss_real + dloss_fake
-            total_d_loss = dloss_real + dloss_fake + reg #+ d_label_loss 
+            total_d_loss = dloss_real + dloss_fake + reg #+ d_label_loss
             # dloss_all = dloss_real + dloss_fake +reg
             total_d_loss.backward()
             d_optimizer.step()
@@ -234,21 +244,32 @@ def main():
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
-            # x_fake, _= generator(z, label)
-            x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
-            d_fake, label_fake = discriminator(x_fake, label)
-            # output = discriminator(x_fake, label)
-            # d_fake = dhead(output)
-            # g_label_loss = mce_loss([2], label_fake, one_hot)
 
-            gloss = compute_loss(d_fake, 1) 
-            ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
-            # label_fake = qhead(output)
-            # label_loss = mce_loss([2], label_fake, one_hot.to(device))
-            gloss_all = gloss + ccsr_consistency_loss#+ g_label_loss
+            # 檢查是否使用超分辨率
+            use_sr = hasattr(generator, 'use_esrgan') and generator.use_esrgan
+            use_sr = use_sr or (hasattr(generator, 'use_ccsr') and generator.use_ccsr)
+
+            if use_sr:
+                x_fake_nerf, _, x_fake_sr = generator(z, label, return_sr_output=True)
+                # 使用超分辨率輸出進行 GAN 訓練
+                d_fake, label_fake = discriminator(x_fake_sr, label)
+
+                # GAN 損失
+                gloss = compute_loss(d_fake, 1)
+
+                # SR 一致性損失：讓 SR 輸出接近 NeRF 的高質量輸出
+                sr_consistency_loss = ccsr_nerf_loss(x_fake_sr, x_fake_nerf)
+
+                # 總損失
+                gloss_all = gloss + sr_consistency_loss
+
+            else:
+                x_fake, _ = generator(z, label)
+                d_fake, label_fake = discriminator(x_fake, label)
+                gloss = compute_loss(d_fake, 1)
+                gloss_all = gloss
 
             gloss_all.backward()
-            # gloss.backward()
             g_optimizer.step()
             g_scheduler.step()
 
@@ -256,16 +277,20 @@ def main():
             current_lr_d = d_optimizer.param_groups[0]['lr']
             # wandb
             if (it + 1) % config['training']['print_every'] == 0:
-                wandb.log({
+                log_dict = {
                     "loss/generator": gloss,
-                    "loss/ccsr_consistency": ccsr_consistency_loss,
                     "loss/generator_total": gloss_all,
                     "loss/discriminator": total_d_loss,
                     "loss/regularizer": reg,
                     "learning rate/generator": current_lr_g,
                     "learning rate/discriminator": current_lr_d,
                     "iteration": it
-                })
+                }
+                # 添加 SR 一致性損失（如果使用）
+                if use_sr and 'sr_consistency_loss' in locals():
+                    log_dict["loss/sr_consistency"] = sr_consistency_loss
+
+                wandb.log(log_dict)
             
             # 在需要儲存資料的位置，例如在訓練迴圈中特定迭代次數時
             # if (it % 6000 == 0):

@@ -67,11 +67,21 @@ training:
   take_model_average: true
 z_dist:
   dim: 256
-  # dim_appearance: 128 
+  # dim_appearance: 128
   type: gauss
-ccsr: 
-    enabled: True,
-    num_views: 8,
-    scale_factor: 4,
-    alpha_init: 1.0,
-    alpha_decay: 0.0001
+
+# 超分辨率模組配置
+# 選項 1: 使用預訓練的 ESRGAN 模型（推薦）
+esrgan:
+  enabled: true  # 啟用 ESRGAN
+  pretrained_path: 'pretrained_models/RRDB_ESRGAN_x4.pth'  # 預訓練模型路徑
+  freeze: true  # 凍結 ESRGAN 參數（推薦）
+  scale_factor: 4
+
+# 選項 2: 使用自定義 CCSR 模組（如果 esrgan.enabled=false）
+ccsr:
+  enabled: false  # 如果使用 ESRGAN，設為 false
+  num_views: 8
+  scale_factor: 4
+  alpha_init: 1.0
+  alpha_decay: 0.0001

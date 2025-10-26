@@ -1,19 +1,21 @@
 import numpy as np
 import torch
-from ..utils import sample_on_sphere, look_at, to_sphere 
+from ..utils import sample_on_sphere, look_at, to_sphere
 from graf.transforms import ImgToPatch
 from ..transforms import FullRaySampler
 from submodules.nerf_pytorch.run_nerf_mod import render, run_network            # import conditional render
 from functools import partial
-import torch.nn.functional as F  
+import torch.nn.functional as F
 from graf.models.ccsr import CCSR
+from graf.models.esrgan_model import ESRGANWrapper
 import os
 import pickle
 
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
+                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False,
+                 use_ccsr=True, num_views=8, use_esrgan=False, esrgan_pretrained_path=None, esrgan_freeze=True):
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -25,6 +27,7 @@ class Generator(object):
         self.v = v
         self.use_default_rays = use_default_rays
         self.use_ccsr = use_ccsr
+        self.use_esrgan = use_esrgan
 
         coords = torch.from_numpy(np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), -1))
         self.coords = coords.view(-1, 2)
@@ -41,9 +44,19 @@ class Generator(object):
             if module is not None:
                 self.module_dict[name] = module
 
-        # 添加CCSR模組
-        if self.use_ccsr:
-            # 假設低分辨率圖像尺寸為原圖的1/4
+        # 添加超分辨率模組
+        if self.use_esrgan:
+            # 使用 ESRGAN 預訓練模型
+            print(f"使用 ESRGAN 模型，預訓練路徑: {esrgan_pretrained_path}")
+            self.esrgan = ESRGANWrapper(
+                pretrained_path=esrgan_pretrained_path,
+                freeze=esrgan_freeze,
+                scale=4
+            ).to(device)
+            self.module_dict['esrgan'] = self.esrgan
+
+        elif self.use_ccsr:
+            # 使用自定義 CCSR 模組
             lr_height, lr_width = H // 4, W // 4
             self.ccsr = CCSR(num_views=num_views, lr_height=lr_height, lr_width=lr_width, scale_factor=4).to(device)
             self.module_dict['ccsr'] = self.ccsr
@@ -60,7 +73,7 @@ class Generator(object):
         self.use_test_kwargs = False
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
-    def __call__(self, z, label, rays=None, return_ccsr_output=False):
+    def __call__(self, z, label, rays=None, return_sr_output=False):
         bs = z.shape[0]
         if rays is None:
             if self.use_default_rays :
@@ -80,7 +93,7 @@ class Generator(object):
                     # 使用選定的角度生成光線
                     rays = self.sample_select_rays(selected_u, selected_v)
                     all_rays.append(rays)
-                    
+
                 rays = torch.cat(all_rays, dim=1)
 
 
@@ -92,54 +105,62 @@ class Generator(object):
                                         **render_kwargs)
 
         rays_to_output = lambda x: x.view(len(x), -1) * 2 - 1      # (BxN_samples)xC
-    
+
         if self.use_test_kwargs:               # return all outputs
             return rays_to_output(rgb), \
                    rays_to_output(disp), \
                    rays_to_output(acc), extras
 
-        rgb = rays_to_output(rgb)
+        rgb_nerf = rays_to_output(rgb)
 
-        # 如果啟用CCSR並且需要返回CCSR輸出
-        ccsr_output = None
-        if self.use_ccsr and return_ccsr_output:
-            # 將NeRF輸出轉換為圖像格式進行CCSR處理
-            # 這裡需要根據您的patch採樣方式調整
-            total_elements = rgb.numel()
-            rgb_nerf = rgb.view(bs, total_elements // (bs * 3), 3)
-            nerf_images = rgb_nerf.view(bs, int(np.sqrt(rgb_nerf.shape[1])), int(np.sqrt(rgb_nerf.shape[1])), 3).permute(0, 3, 1, 2)
-            
-            # 生成低分辨率版本
-            patch_size = 64
-            lr_size = max(8, patch_size // 4)
-            lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size), mode='bilinear', align_corners=False)
-            
-            # 對每個樣本應用CCSR
-            ccsr_results = []
-            for i in range(bs):
-                # 使用label中的信息確定視角索引
-                # view_idx = int(label[i, 2].item()) if label.shape[1] > 2 else i
-                angle_idx = int(label[i, 2].item())
-                # 將 360 個角度映射到 8 個視角
-                view_idx = (angle_idx * 8) // 360  # 0-7 的範圍
-                ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
-                # view_idx = 72
-                # ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
-                ccsr_results.append(ccsr_result)
-            
-            ccsr_combined  = torch.cat(ccsr_results, dim=0)
-            ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size), 
-                                       mode='bilinear', align_corners=False)
-            # 轉換為與NeRF輸出相同的格式
-            # ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
+        # 超分辨率處理
+        sr_output = None
+        if (self.use_esrgan or self.use_ccsr) and return_sr_output:
+            # 將 NeRF 輸出轉換為圖像格式
+            total_elements = rgb_nerf.numel()
+            rgb_nerf_reshaped = rgb_nerf.view(bs, total_elements // (bs * 3), 3)
+            patch_size = int(np.sqrt(rgb_nerf_reshaped.shape[1]))
+            nerf_images = rgb_nerf_reshaped.view(bs, patch_size, patch_size, 3).permute(0, 3, 1, 2)
 
-        if return_ccsr_output:
-            ccsr_output = ccsr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
-            return rgb, rays, ccsr_output
+            if self.use_esrgan:
+                # 使用 ESRGAN 進行超分辨率
+                # NeRF 渲染的是 patch_size (64x64)，先下採樣到 1/4 再用 ESRGAN 上採樣
+                lr_size = patch_size // 4  # 16x16
+                lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size),
+                                        mode='bilinear', align_corners=False)
+
+                # ESRGAN 超分辨率 (16x16 -> 64x64)
+                sr_images = self.esrgan(lr_images)
+
+                # 調整到目標尺寸
+                sr_resized = F.interpolate(sr_images, size=(patch_size, patch_size),
+                                         mode='bilinear', align_corners=False)
+
+            elif self.use_ccsr:
+                # 使用 CCSR 進行超分辨率
+                lr_size = max(8, patch_size // 4)
+                lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size),
+                                        mode='bilinear', align_corners=False)
+
+                # 對每個樣本應用 CCSR
+                ccsr_results = []
+                for i in range(bs):
+                    angle_idx = int(label[i, 2].item())
+                    view_idx = (angle_idx * 8) // 360  # 映射到 0-7
+                    ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
+                    ccsr_results.append(ccsr_result)
+
+                sr_combined = torch.cat(ccsr_results, dim=0)
+                sr_resized = F.interpolate(sr_combined, size=(patch_size, patch_size),
+                                         mode='bilinear', align_corners=False)
+
+            # 轉換回與 NeRF 相同的格式
+            sr_output = sr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
+
+        if return_sr_output:
+            return rgb_nerf, rays, sr_output
         else:
-            return rgb, rays
-        
-        # return rgb, rays
+            return rgb_nerf, rays
 
     def decrease_nerf_noise(self, it):
         end_it = 5000

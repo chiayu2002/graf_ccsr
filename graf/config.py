@@ -92,6 +92,23 @@ def build_models(config, disc=True):
 
     H, W, f, r = config['data']['hwfr']
 
+    # 超分辨率配置
+    use_esrgan = config.get('esrgan', {}).get('enabled', False)
+    use_ccsr = config.get('ccsr', {}).get('enabled', False) if not use_esrgan else False
+
+    esrgan_config = {}
+    if use_esrgan:
+        esrgan_config = {
+            'use_esrgan': True,
+            'esrgan_pretrained_path': config['esrgan'].get('pretrained_path', None),
+            'esrgan_freeze': config['esrgan'].get('freeze', True),
+        }
+    elif use_ccsr:
+        esrgan_config = {
+            'use_ccsr': True,
+            'num_views': config['ccsr'].get('num_views', 8),
+        }
+
     generator = Generator(H, W, f, r,
                           ray_sampler=ray_sampler,
                           render_kwargs_train=render_kwargs_train, render_kwargs_test=render_kwargs_test,
@@ -102,8 +119,7 @@ def build_models(config, disc=True):
                           orthographic=config['data']['orthographic'],
                           v=config['data']['v'],
                           use_default_rays=config['data']['use_default_rays'],
-                          use_ccsr=True,  # 啟用CCSR
-                          num_views=8
+                          **esrgan_config
                           )
     
     discriminator = None
