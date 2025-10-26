@@ -9,3 +9,12 @@ model_params.txt
 /wandb
 *.pth
 /txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+*.pyo
