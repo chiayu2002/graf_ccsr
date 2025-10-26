@@ -7,6 +7,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# 明确导出的类
+__all__ = ['ResidualDenseBlock', 'RRDB', 'RRDBNet', 'ESRGANWrapper']
+
 
 class ResidualDenseBlock(nn.Module):
     """Residual Dense Block (RDB) used in RRDB"""
