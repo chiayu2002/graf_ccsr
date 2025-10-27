@@ -185,12 +185,55 @@ def main():
 
             x_real = x_real.to(device)
             rgbs = img_to_patch(x_real)
-            rgbs.requires_grad_(True)
 
             z = zdist.sample((batch_size,))
-            
-            #real data
-            d_real, label_real = discriminator(rgbs, label)
+
+            # 檢查是否使用超分辨率
+            use_sr = (hasattr(generator, 'use_esrgan') and generator.use_esrgan) or \
+                     (hasattr(generator, 'use_ccsr') and generator.use_ccsr) or \
+                     (hasattr(generator, 'use_ccsr_esrgan') and generator.use_ccsr_esrgan)
+
+            # 如果使用 SR，真實圖片也要通過 CCSR 處理
+            if use_sr:
+                # 將 patch 格式轉換為圖像格式
+                total_elements = rgbs.numel()
+                rgbs_reshaped = rgbs.view(batch_size, total_elements // (batch_size * 3), 3)
+                patch_size = int(np.sqrt(rgbs_reshaped.shape[1]))
+                real_images = rgbs_reshaped.view(batch_size, patch_size, patch_size, 3).permute(0, 3, 1, 2)
+
+                # 下採樣到低分辨率
+                lr_size = max(8, patch_size // 4)
+                lr_real_images = F.interpolate(real_images, size=(lr_size, lr_size),
+                                              mode='bilinear', align_corners=False)
+
+                # 對每個樣本應用 CCSR
+                sr_real_results = []
+                for i in range(batch_size):
+                    angle_idx = int(label[i, 2].item())
+                    view_idx = (angle_idx * 8) // 360  # 映射到 0-7
+
+                    if generator.use_ccsr_esrgan:
+                        result = generator.ccsr_esrgan(lr_real_images[i:i+1], view_idx)
+                    elif generator.use_esrgan:
+                        result = generator.esrgan(lr_real_images[i:i+1])
+                    elif generator.use_ccsr:
+                        result = generator.ccsr(lr_real_images[i:i+1], view_idx)
+
+                    sr_real_results.append(result)
+
+                sr_real_combined = torch.cat(sr_real_results, dim=0)
+                sr_real_resized = F.interpolate(sr_real_combined, size=(patch_size, patch_size),
+                                               mode='bilinear', align_corners=False)
+
+                # 轉換回 patch 格式
+                rgbs_sr = sr_real_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
+                rgbs_sr.requires_grad_(True)
+
+                # 使用 SR 處理後的真實圖片
+                d_real, label_real = discriminator(rgbs_sr, label)
+            else:
+                rgbs.requires_grad_(True)
+                d_real, label_real = discriminator(rgbs, label)
             # output1 = discriminator(rgbs, label)
             # d_real = dhead(output1)
             dloss_real = compute_loss(d_real, 1)
@@ -198,16 +241,13 @@ def main():
             # d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
             # dloss_real.backward(retain_graph=True)
-            reg = 80. * compute_grad2(d_real, rgbs).mean()
+            # 使用正確的 rgbs 變數計算梯度懲罰
+            rgbs_for_reg = rgbs_sr if use_sr else rgbs
+            reg = 80. * compute_grad2(d_real, rgbs_for_reg).mean()
             # reg.backward()
             
             #fake data
             with torch.no_grad():
-                # 檢查是否使用超分辨率
-                use_sr = (hasattr(generator, 'use_esrgan') and generator.use_esrgan) or \
-                         (hasattr(generator, 'use_ccsr') and generator.use_ccsr) or \
-                         (hasattr(generator, 'use_ccsr_esrgan') and generator.use_ccsr_esrgan)
-
                 if use_sr:
                     x_fake_nerf, _, x_fake_sr = generator(z, label, return_sr_output=True)
                     # 使用超分辨率輸出訓練 Discriminator
