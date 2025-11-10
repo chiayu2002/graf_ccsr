@@ -149,7 +149,10 @@ class BottomFocusedRaySampler(RaySampler):
         top_w = torch.randint(0, W, (N_top,))
         top_indices = top_h * W + top_w
 
-        # 合并索引（无需打乱，因为采样位置本身已经是随机的）
+        # 合并并打乱索引
+        # 重要：必须打乱！因为判别器会把这些点重塑成固定形状的patch
+        # 如果不打乱，"前70%总是下半部分"会成为判别器可利用的虚假模式
         all_indices = torch.cat([bottom_indices, top_indices])
+        perm = torch.randperm(all_indices.size(0))
 
-        return all_indices
+        return all_indices[perm]
