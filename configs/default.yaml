@@ -36,7 +36,9 @@ nerf:
   netdepth_fine: 8
   netwidth_fine: 256
 ray_sampler:
+  type: bottom_focused  # 使用专注于下半部分的采样器 (可选值: 'flex_grid', 'bottom_focused')
   N_samples: 4096 #1024 #4096
+  bottom_ratio: 0.7  # 下半部分的采样比例 (仅当 type='bottom_focused' 时使用)
   max_scale: 1.0
   min_scale: 0.25
   scale_anneal: 0.0025

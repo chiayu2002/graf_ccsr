@@ -4,7 +4,7 @@ from torchvision.transforms import *
 import os
 
 from .datasets import *
-from .transforms import FlexGridRaySampler
+from .transforms import FlexGridRaySampler, BottomFocusedRaySampler
 import yaml
 from .utils import polar_to_cartesian, look_at
 
@@ -81,14 +81,25 @@ def build_models(config, disc=True):
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    ray_sampler = FlexGridRaySampler(N_samples=config['ray_sampler']['N_samples'],
-                                     min_scale=config['ray_sampler']['min_scale'],
-                                     max_scale=config['ray_sampler']['max_scale'],
-                                     scale_anneal=config['ray_sampler']['scale_anneal'],
-                                     orthographic=config['data']['orthographic'],
-                                     random_shift = False,
-                                     random_scale = False
-                                     )
+    # 根据配置选择采样器类型
+    sampler_type = config['ray_sampler'].get('type', 'flex_grid')  # 默认使用 flex_grid
+
+    if sampler_type == 'bottom_focused':
+        ray_sampler = BottomFocusedRaySampler(
+            N_samples=config['ray_sampler']['N_samples'],
+            bottom_ratio=config['ray_sampler'].get('bottom_ratio', 0.7),  # 默认70%在下半部分
+            orthographic=config['data']['orthographic']
+        )
+    else:  # 默认使用 FlexGridRaySampler
+        ray_sampler = FlexGridRaySampler(
+            N_samples=config['ray_sampler']['N_samples'],
+            min_scale=config['ray_sampler']['min_scale'],
+            max_scale=config['ray_sampler']['max_scale'],
+            scale_anneal=config['ray_sampler']['scale_anneal'],
+            orthographic=config['data']['orthographic'],
+            random_shift = False,
+            random_scale = False
+        )
 
     H, W, f, r = config['data']['hwfr']
 

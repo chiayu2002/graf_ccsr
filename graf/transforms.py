@@ -109,3 +109,48 @@ class FlexGridRaySampler(RaySampler):
         w = self.w.clone()
 
         return torch.cat([h, w], dim=2) #torch.Size([32, 32, 2])
+
+
+class BottomFocusedRaySampler(RaySampler):
+    """
+    专注于图片下半部分的光线采样器
+    在下半部分采样更多的点，以提升下半部分的细节
+    """
+    def __init__(self, N_samples, bottom_ratio=0.7, **kwargs):
+        """
+        Args:
+            N_samples: 总采样数量
+            bottom_ratio: 下半部分的采样比例 (0.7 表示70%的点在下半部分)
+        """
+        super(BottomFocusedRaySampler, self).__init__(N_samples, **kwargs)
+        self.bottom_ratio = bottom_ratio
+
+    def sample_rays(self, H, W):
+        """
+        采样光线，让更多的采样点集中在图片下半部分
+
+        Args:
+            H: 图片高度
+            W: 图片宽度
+
+        Returns:
+            采样点的索引 (1D tensor)
+        """
+        N_bottom = int(self.N_samples * self.bottom_ratio)
+        N_top = self.N_samples - N_bottom
+
+        # 下半部分采样 (从 H/2 到 H)
+        bottom_h = torch.randint(H // 2, H, (N_bottom,))
+        bottom_w = torch.randint(0, W, (N_bottom,))
+        bottom_indices = bottom_h * W + bottom_w
+
+        # 上半部分采样 (从 0 到 H/2)
+        top_h = torch.randint(0, H // 2, (N_top,))
+        top_w = torch.randint(0, W, (N_top,))
+        top_indices = top_h * W + top_w
+
+        # 合并并打乱顺序
+        all_indices = torch.cat([bottom_indices, top_indices])
+        perm = torch.randperm(all_indices.size(0))
+
+        return all_indices[perm]
