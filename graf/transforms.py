@@ -5,26 +5,42 @@ from submodules.nerf_pytorch.run_nerf_helpers_mod import get_rays, get_rays_orth
 
 
 class ImgToPatch(object):
-    def __init__(self, ray_sampler, hwf):
+    def __init__(self, ray_sampler, hwf, return_height_info=False):
         self.ray_sampler = ray_sampler
         self.hwf = hwf      # camera intrinsics
+        self.return_height_info = return_height_info
 
     def __call__(self, img):
         rgbs = []
+        heights = []  # 记录每个样本的高度索引
+
         for img_i in img:
             pose = torch.eye(4)         # use dummy pose to infer pixel values
             _, selected_idcs, pixels_i = self.ray_sampler(H=self.hwf[0], W=self.hwf[1], focal=self.hwf[2], pose=pose)
             if selected_idcs is not None:
                 rgbs_i = img_i.flatten(1, 2).t()[selected_idcs]
+                # 计算每个索引的高度位置
+                h_indices = selected_idcs // self.hwf[1]  # 高度索引
+                heights.append(h_indices)
             else:
-                rgbs_i = torch.nn.functional.grid_sample(img_i.unsqueeze(0), 
+                rgbs_i = torch.nn.functional.grid_sample(img_i.unsqueeze(0),
                                      pixels_i.unsqueeze(0), mode='bilinear', align_corners=True)[0]
                 rgbs_i = rgbs_i.flatten(1, 2).t()
+                # 从 pixels_i 提取高度信息
+                # pixels_i 格式: [N, N, 2], 其中 [..., 0] 是 h, [..., 1] 是 w, 范围在 [-1, 1]
+                h_normalized = pixels_i[..., 0]  # [-1, 1]
+                h_indices = ((h_normalized + 1) / 2 * self.hwf[0]).long()
+                heights.append(h_indices.flatten())
+
             rgbs.append(rgbs_i)
 
         rgbs = torch.cat(rgbs, dim=0)       # (B*N)x3
 
-        return rgbs
+        if self.return_height_info:
+            heights = torch.cat(heights, dim=0)  # (B*N)
+            return rgbs, heights
+        else:
+            return rgbs
 
 
 class RaySampler(object): #生成相機射線

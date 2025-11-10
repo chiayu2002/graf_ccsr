@@ -36,12 +36,14 @@ nerf:
   netdepth_fine: 8
   netwidth_fine: 256
 ray_sampler:
-  type: bottom_focused  # 使用专注于下半部分的采样器 (可选值: 'flex_grid', 'bottom_focused')
+  type: flex_grid  # 使用标准采样器
   N_samples: 4096 #1024 #4096
-  bottom_ratio: 0.7  # 下半部分的采样比例 (仅当 type='bottom_focused' 时使用)
   max_scale: 1.0
   min_scale: 0.25
   scale_anneal: 0.0025
+  # 区域加权参数
+  use_region_weight: true  # 启用区域加权损失
+  lower_half_weight: 2.0   # 下半部分的损失权重（2.0表示下半部分的损失权重是上半部分的2倍）
 training:
   backup_every: 50000
   batch_size: 8

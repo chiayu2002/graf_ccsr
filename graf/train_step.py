@@ -24,30 +24,82 @@ class MCE_Loss(nn.Module):
         
         return sum(loss)
 
+class RegionWeightedLoss(nn.Module):
+    """对图片不同区域应用不同权重的损失
+
+    用于让模型更关注图片下半部分的细节
+    """
+
+    def __init__(self, lower_half_weight=2.0, upper_half_weight=1.0):
+        """
+        Args:
+            lower_half_weight: 下半部分的损失权重
+            upper_half_weight: 上半部分的损失权重
+        """
+        super().__init__()
+        self.lower_half_weight = lower_half_weight
+        self.upper_half_weight = upper_half_weight
+
+    def forward(self, d_out, target, height_indices, H):
+        """
+        计算区域加权的损失
+
+        Args:
+            d_out: 判别器输出 [B*N]
+            target: 目标值 (0 或 1)
+            height_indices: 每个样本的高度索引 [B*N]
+            H: 图片高度
+
+        Returns:
+            加权后的损失
+        """
+        mid_point = H // 2
+
+        # 创建权重 mask
+        weights = torch.ones_like(d_out, dtype=torch.float32)
+
+        # 对每个判别器输出元素，根据其对应的高度索引分配权重
+        for i in range(d_out.shape[0]):
+            if i < len(height_indices):
+                if height_indices[i] >= mid_point:
+                    weights[i] = self.lower_half_weight
+                else:
+                    weights[i] = self.upper_half_weight
+
+        # 计算 BCE 损失
+        targets = d_out.new_full(size=d_out.size(), fill_value=target)
+        bce_loss = nn.functional.binary_cross_entropy_with_logits(d_out, targets, reduction='none')
+
+        # 应用权重
+        weighted_loss = (bce_loss * weights).mean()
+
+        return weighted_loss
+
+
 class CCSRNeRFLoss(nn.Module):
     """CCSR與NeRF的聯合損失"""
-    
+
     def __init__(self, alpha_init=1.0, alpha_decay=0.0001):
         super().__init__()
         self.mse_loss = nn.MSELoss()
         self.alpha_init = alpha_init
         self.alpha_decay = alpha_decay
         self.iteration = 0
-        
+
     def forward(self, ccsr_output, nerf_output):
         """
         計算CCSR輸出與NeRF輸出的MSE損失
-        
+
         Args:
-            ccsr_output: CCSR生成的圖像 [B, N_samples, 3] 
+            ccsr_output: CCSR生成的圖像 [B, N_samples, 3]
             nerf_output: NeRF渲染的圖像 [B, N_samples, 3]
         """
         # 動態調整權重
         alpha = self.alpha_init * np.exp(-self.alpha_decay * self.iteration)
-        
+
         # 計算MSE損失
         consistency_loss = self.mse_loss(ccsr_output, nerf_output.detach())
-        
+
         self.iteration += 1
         return alpha * consistency_loss
     

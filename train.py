@@ -16,7 +16,7 @@ sys.path.append('submodules')
 from graf.gan_training import Evaluator
 from graf.config import get_data, build_models, load_config, save_config, build_lr_scheduler
 from graf.utils import get_zdist
-from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss, CCSRNeRFLoss
+from graf.train_step import compute_grad2, compute_loss, save_data, wgan_gp_reg, toggle_grad, MCE_Loss, CCSRNeRFLoss, RegionWeightedLoss
 from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
@@ -101,6 +101,13 @@ def main():
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
     mce_loss = MCE_Loss()
 
+    # 区域加权损失 - 用于强调下半部分细节
+    use_region_weight = config['ray_sampler'].get('use_region_weight', False)
+    if use_region_weight:
+        lower_half_weight = config['ray_sampler'].get('lower_half_weight', 2.0)
+        region_weighted_loss = RegionWeightedLoss(lower_half_weight=lower_half_weight).to(device)
+        print(f"启用区域加权损失: 下半部分权重 = {lower_half_weight}x")
+
     file_path = os.path.join(out_dir, "model_architecture.txt")
     with open(file_path, 'w') as f:
         f.write('Discriminator Architecture:\n')
@@ -127,7 +134,7 @@ def main():
 
     #get patch
     hwfr = config['data']['hwfr']
-    img_to_patch = ImgToPatch(generator.ray_sampler, hwfr[:3])
+    img_to_patch = ImgToPatch(generator.ray_sampler, hwfr[:3], return_height_info=use_region_weight)
     
     # 設置檢查點
     checkpoint_io = CheckpointIO(checkpoint_dir=checkpoint_dir)
@@ -184,23 +191,38 @@ def main():
             d_optimizer.zero_grad()
 
             x_real = x_real.to(device)
-            rgbs = img_to_patch(x_real)
+
+            # 获取 RGB 和高度信息（如果启用区域加权）
+            if use_region_weight:
+                rgbs, heights = img_to_patch(x_real)
+                heights = heights.to(device)
+            else:
+                rgbs = img_to_patch(x_real)
+                heights = None
+
             rgbs.requires_grad_(True)
 
             z = zdist.sample((batch_size,))
-            
+
             #real data
             d_real, label_real = discriminator(rgbs, label)
             # output1 = discriminator(rgbs, label)
             # d_real = dhead(output1)
-            dloss_real = compute_loss(d_real, 1)
+
+            # 使用区域加权损失（如果启用）
+            if use_region_weight and heights is not None:
+                H = hwfr[0]  # 图片高度
+                dloss_real = region_weighted_loss(d_real, 1, heights, H)
+            else:
+                dloss_real = compute_loss(d_real, 1)
+
             # one_hot = one_hot.to(label_real.device)
             # d_label_loss = mce_loss([2], label_real, one_hot)
             # dloss_real.backward()
             # dloss_real.backward(retain_graph=True)
             reg = 80. * compute_grad2(d_real, rgbs).mean()
             # reg.backward()
-            
+
             #fake data
             with torch.no_grad():
                 x_fake, _ = generator(z, label)
@@ -209,6 +231,8 @@ def main():
             d_fake, _ = discriminator(x_fake, label)
             # output2 = discriminator(x_fake, label)
             # d_fake = dhead(output2)
+
+            # 假数据使用标准损失（因为没有位置信息）
             dloss_fake = compute_loss(d_fake, 0)
             # dloss_fake.backward()
             # reg = 10. * wgan_gp_reg(discriminator, rgbs, x_fake, label)
