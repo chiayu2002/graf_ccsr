@@ -55,16 +55,13 @@ class RegionWeightedLoss(nn.Module):
         """
         mid_point = H // 2
 
-        # 创建权重 mask
-        weights = torch.ones_like(d_out, dtype=torch.float32)
+        # 向量化操作：创建权重 mask
+        # 先创建上半部分权重的tensor
+        weights = torch.full_like(d_out, self.upper_half_weight, dtype=torch.float32)
 
-        # 对每个判别器输出元素，根据其对应的高度索引分配权重
-        for i in range(d_out.shape[0]):
-            if i < len(height_indices):
-                if height_indices[i] >= mid_point:
-                    weights[i] = self.lower_half_weight
-                else:
-                    weights[i] = self.upper_half_weight
+        # 找到下半部分的索引并设置权重
+        lower_half_mask = height_indices >= mid_point
+        weights[lower_half_mask[:d_out.shape[0]]] = self.lower_half_weight
 
         # 计算 BCE 损失
         targets = d_out.new_full(size=d_out.size(), fill_value=target)
