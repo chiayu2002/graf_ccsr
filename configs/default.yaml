@@ -1,4 +1,4 @@
-expname: column251023_view
+expname: column251123_finenet
 data:
   datadir: [data/RS307_n]
   far: 4.5
@@ -32,7 +32,7 @@ nerf:
   perturb: 1.0
   raw_noise_std: 1.0
   use_viewdirs: true
-  N_importance: 0
+  N_importance: 64
   netdepth_fine: 8
   netwidth_fine: 256
 ray_sampler:
@@ -75,3 +75,13 @@ ccsr:
     scale_factor: 4,
     alpha_init: 1.0,
     alpha_decay: 0.0001
+wandb:
+  project: graf251105
+  entity: vicky20020808
+  name: RS307_benchmark
+
+# use_nerfacc: true  # 設為 false 可禁用
+# grid_resolution: 128  # 可嘗試 64, 128, 256
+# update_interval: 256  # 每多少次迭代更新一次
+# occ_thre: 0.01  # 佔用閾值
+# scene_aabb: [-2.5, -2.5, -2.5, 2.5, 2.5, 2.5]  # 根據您的場景調整

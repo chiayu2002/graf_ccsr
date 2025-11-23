@@ -154,9 +154,9 @@ def create_nerf(args):
     if args.N_importance > 0:
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs, numclasses=args.num_class)
         grad_vars += list(model_fine.parameters())
-        named_params = list(model_fine.named_parameters())
+        named_params += list(model_fine.named_parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn, label, features: run_network(inputs, viewdirs, network_fn, label,
                                                                                   features=features,
@@ -271,32 +271,32 @@ def render_rays(ray_batch,
     raw = network_query_fn(pts, viewdirs, network_fn, label, features)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, pytest=pytest)
 
-#     if N_importance > 0:
+    if N_importance > 0:
 
-#         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
-#         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-#         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
-#         z_samples = z_samples.detach()
+        z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
+        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
+        z_samples = z_samples.detach()
 
-#         z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
-#         pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
+        z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
+        pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
 
-#         run_fn = network_fn if network_fine is None else network_fine
-# #         raw = run_network(pts, fn=run_fn)
-#         raw = network_query_fn(pts, viewdirs, run_fn, label, features)
+        run_fn = network_fn if network_fine is None else network_fine
+#         raw = run_network(pts, fn=run_fn)
+        raw = network_query_fn(pts, viewdirs, run_fn, label, features)
 
-#         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, pytest=pytest)
 
     ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
     # if retraw:
     #     ret['raw'] = raw
 
-    # if N_importance > 0:
-    #     ret['rgb0'] = rgb_map_0
-    #     ret['disp0'] = disp_map_0
-    #     ret['acc0'] = acc_map_0
-    #     ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
+    if N_importance > 0:
+        ret['rgb0'] = rgb_map_0
+        ret['disp0'] = disp_map_0
+        ret['acc0'] = acc_map_0
+        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
         if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
