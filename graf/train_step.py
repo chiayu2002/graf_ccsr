@@ -4,9 +4,11 @@ import torch.utils.data
 import torch.utils.data.distributed
 from torch import autograd
 import torch.nn as nn
+import torch.nn.functional as F
 import pickle
 import numpy as np
 import os
+import torchvision.models as models
 
 
 class MCE_Loss(nn.Module):
@@ -24,32 +26,85 @@ class MCE_Loss(nn.Module):
         
         return sum(loss)
 
+class VGGPerceptualLoss(nn.Module):
+    """VGG感知損失用於保持高頻細節"""
+
+    def __init__(self, device='cuda'):
+        super().__init__()
+        # 使用預訓練的VGG19提取特徵
+        vgg = models.vgg19(pretrained=True).features
+        self.feature_extractor = nn.Sequential(*list(vgg[:36])).eval().to(device)
+
+        # 凍結VGG參數
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = False
+
+        # 用於標準化輸入
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def normalize(self, x):
+        """將[-1,1]範圍的圖像轉換為VGG期望的[0,1]範圍並標準化"""
+        x = (x + 1) / 2  # [-1, 1] -> [0, 1]
+        return (x - self.mean) / self.std
+
+    def forward(self, pred, target):
+        """計算感知損失"""
+        pred_normalized = self.normalize(pred)
+        target_normalized = self.normalize(target)
+
+        pred_features = self.feature_extractor(pred_normalized)
+        target_features = self.feature_extractor(target_normalized)
+
+        loss = F.mse_loss(pred_features, target_features)
+        return loss
+
+
 class CCSRNeRFLoss(nn.Module):
-    """CCSR與NeRF的聯合損失"""
-    
-    def __init__(self, alpha_init=1.0, alpha_decay=0.0001):
+    """CCSR與NeRF的聯合損失 - 增強版本包含感知損失"""
+
+    def __init__(self, alpha_init=1.0, alpha_decay=0.0001, perceptual_weight=0.1, device='cuda'):
         super().__init__()
         self.mse_loss = nn.MSELoss()
+        self.perceptual_loss = VGGPerceptualLoss(device=device)
         self.alpha_init = alpha_init
         self.alpha_decay = alpha_decay
+        self.perceptual_weight = perceptual_weight
         self.iteration = 0
-        
+
     def forward(self, ccsr_output, nerf_output):
         """
-        計算CCSR輸出與NeRF輸出的MSE損失
-        
+        計算CCSR輸出與NeRF輸出的聯合損失
+
         Args:
-            ccsr_output: CCSR生成的圖像 [B, N_samples, 3] 
-            nerf_output: NeRF渲染的圖像 [B, N_samples, 3]
+            ccsr_output: CCSR生成的圖像 [B, 3, H, W] 或 [B*H*W, 3]
+            nerf_output: NeRF渲染的圖像 [B, 3, H, W] 或 [B*H*W, 3]
         """
         # 動態調整權重
         alpha = self.alpha_init * np.exp(-self.alpha_decay * self.iteration)
-        
-        # 計算MSE損失
-        consistency_loss = self.mse_loss(ccsr_output, nerf_output.detach())
-        
+
+        # 計算MSE損失（像素級）
+        mse_loss = self.mse_loss(ccsr_output, nerf_output.detach())
+
+        # 計算感知損失（特徵級）
+        # 確保輸入是4D張量 [B, C, H, W]
+        if ccsr_output.dim() == 2:  # [N, 3]
+            # 需要重塑為圖像格式
+            batch_size = int(np.sqrt(ccsr_output.shape[0]))
+            if batch_size * batch_size == ccsr_output.shape[0]:
+                ccsr_img = ccsr_output.view(batch_size, batch_size, 3).permute(2, 0, 1).unsqueeze(0)
+                nerf_img = nerf_output.view(batch_size, batch_size, 3).permute(2, 0, 1).unsqueeze(0)
+                perceptual_loss = self.perceptual_loss(ccsr_img, nerf_img.detach())
+            else:
+                perceptual_loss = 0.0
+        else:
+            perceptual_loss = self.perceptual_loss(ccsr_output, nerf_output.detach())
+
+        # 總損失
+        total_loss = alpha * (mse_loss + self.perceptual_weight * perceptual_loss)
+
         self.iteration += 1
-        return alpha * consistency_loss
+        return total_loss
     
 
 def compute_loss(d_outs, target):

@@ -102,8 +102,9 @@ def build_models(config, disc=True):
                           orthographic=config['data']['orthographic'],
                           v=config['data']['v'],
                           use_default_rays=config['data']['use_default_rays'],
-                          use_ccsr=True,  # 啟用CCSR
-                          num_views=8
+                          use_ccsr=config.get('ccsr', {}).get('enabled', True),
+                          num_views=config.get('ccsr', {}).get('num_views', 8),
+                          ccsr_config=config.get('ccsr', {})
                           )
     
     discriminator = None

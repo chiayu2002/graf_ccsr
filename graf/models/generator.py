@@ -13,7 +13,7 @@ import pickle
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
+                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8, ccsr_config=None):
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -45,7 +45,16 @@ class Generator(object):
         if self.use_ccsr:
             # 假設低分辨率圖像尺寸為原圖的1/4
             lr_height, lr_width = H // 4, W // 4
-            self.ccsr = CCSR(num_views=num_views, lr_height=lr_height, lr_width=lr_width, scale_factor=4).to(device)
+            ccsr_config = ccsr_config or {}
+            num_res_blocks = ccsr_config.get('num_res_blocks', 8)
+            scale_factor = ccsr_config.get('scale_factor', 4)
+            self.ccsr = CCSR(
+                num_views=num_views,
+                lr_height=lr_height,
+                lr_width=lr_width,
+                scale_factor=scale_factor,
+                num_res_blocks=num_res_blocks
+            ).to(device)
             self.module_dict['ccsr'] = self.ccsr
             
         for name, module in self.module_dict.items():

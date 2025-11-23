@@ -69,9 +69,11 @@ z_dist:
   dim: 256
   # dim_appearance: 128 
   type: gauss
-ccsr: 
-    enabled: True,
-    num_views: 8,
-    scale_factor: 4,
-    alpha_init: 1.0,
+ccsr:
+    enabled: True
+    num_views: 8
+    scale_factor: 4
+    num_res_blocks: 8  # 殘差塊數量，增加可提升質量但會增加計算量
+    alpha_init: 1.0
     alpha_decay: 0.0001
+    perceptual_weight: 0.1  # 感知損失權重，控制高頻細節保留

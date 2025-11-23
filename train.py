@@ -96,9 +96,15 @@ def main():
     )
 
     # 初始化model
-    train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead 
+    train_loader, generator, discriminator = initialize_training(config, device) #, qhead, dhead
 
-    ccsr_nerf_loss = CCSRNeRFLoss().to(device)
+    # 初始化損失函數，包含感知損失
+    ccsr_nerf_loss = CCSRNeRFLoss(
+        alpha_init=config.get('ccsr', {}).get('alpha_init', 1.0),
+        alpha_decay=config.get('ccsr', {}).get('alpha_decay', 0.0001),
+        perceptual_weight=config.get('ccsr', {}).get('perceptual_weight', 0.1),
+        device=device
+    ).to(device)
     mce_loss = MCE_Loss()
 
     file_path = os.path.join(out_dir, "model_architecture.txt")

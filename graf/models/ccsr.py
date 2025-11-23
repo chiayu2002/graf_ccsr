@@ -25,36 +25,34 @@ class ConsistencyControllingLatentCode(nn.Module):
 
 
 class ConsistencyEnforcingModule(nn.Module):
-    """一致性執行模組 (CEM)"""
-    
+    """一致性執行模組 (CEM) - 改進版本使用可學習的權重"""
+
     def __init__(self, blur_kernel_size: int = 3):
         super().__init__()
         # 定義模糊核
         self.blur_kernel_size = blur_kernel_size
         kernel = torch.ones(1, 1, blur_kernel_size, blur_kernel_size) / (blur_kernel_size * blur_kernel_size)
         self.register_buffer('blur_kernel', kernel)
-        
+
+        # 可學習的殘差權重，初始化為0.5
+        self.residual_weight = nn.Parameter(torch.tensor(0.5))
+
     def forward(self, sr_image: torch.Tensor, lr_image: torch.Tensor) -> torch.Tensor:
         """使用模糊核的CEM實現"""
         # 使用模糊核對SR圖像進行模糊處理
-        blurred = F.conv2d(sr_image, 
-                        self.blur_kernel.expand(sr_image.size(1), -1, -1, -1), 
-                        padding=self.blur_kernel_size//2, 
+        blurred = F.conv2d(sr_image,
+                        self.blur_kernel.expand(sr_image.size(1), -1, -1, -1),
+                        padding=self.blur_kernel_size//2,
                         groups=sr_image.size(1))
         downsampled = F.interpolate(blurred, size=lr_image.shape[-2:], mode='bilinear', align_corners=False)
-        """執行一致性強制"""
-        # 簡化的CEM實現
-        # 對SR圖像進行下採樣
-        # scale = sr_image.shape[-1] // lr_image.shape[-1]
-        # downsampled = F.interpolate(sr_image, size=lr_image.shape[-2:], mode='bilinear', align_corners=False)
-        
+
         # 計算殘差並上採樣
         residual = lr_image - downsampled
         upsampled_residual = F.interpolate(residual, size=sr_image.shape[-2:], mode='bilinear', align_corners=False)
-        
-        # 應用修正
-        refined_sr_image = sr_image + 0.5 * upsampled_residual
-        
+
+        # 應用可學習的權重修正
+        refined_sr_image = sr_image + torch.sigmoid(self.residual_weight) * upsampled_residual
+
         return refined_sr_image
 
 # class ConsistencyEnforcingModule(nn.Module):
@@ -96,53 +94,104 @@ class ConsistencyEnforcingModule(nn.Module):
 #         return refined_sr
     
 
-class CCSR(nn.Module):
-    """一致性控制超分辨率模組"""
-    
-    def __init__(self, num_views: int, lr_height: int, lr_width: int, scale_factor: int = 4):
+class ResidualBlock(nn.Module):
+    """殘差塊用於特徵提取"""
+
+    def __init__(self, channels: int):
         super().__init__()
-        
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.relu = nn.LeakyReLU(0.2, inplace=True)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x):
+        residual = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class CCSR(nn.Module):
+    """一致性控制超分辨率模組 - 增強版本"""
+
+    def __init__(self, num_views: int, lr_height: int, lr_width: int, scale_factor: int = 4, num_res_blocks: int = 8):
+        super().__init__()
+
         self.scale_factor = scale_factor
         self.cclc = ConsistencyControllingLatentCode(num_views, 64, 64, 1)
         self.cem = ConsistencyEnforcingModule()
-        
-        # 簡化的超分辨率網絡
-        self.sr_network = self._build_sr_network(scale_factor)
-        self.activation = nn.LeakyReLU(0.2)
-        
-    def _build_sr_network(self, scale_factor: int) -> nn.Module:
-        """構建超分辨率網絡"""
-        return nn.Sequential(
-            nn.Conv2d(6, 64, 3, padding=1),  # 6 = 3(LR) + 3(latent)
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 3 * scale_factor * scale_factor, 3, padding=1),
-            nn.PixelShuffle(scale_factor)
-        )
+
+        # 增強的超分辨率網絡
+        self.num_res_blocks = num_res_blocks
+        self.sr_network = self._build_enhanced_sr_network(scale_factor)
+
+    def _build_enhanced_sr_network(self, scale_factor: int) -> nn.Module:
+        """構建增強的超分辨率網絡，使用殘差塊"""
+        num_channels = 64
+
+        # 初始特徵提取
+        layers = [
+            nn.Conv2d(6, num_channels, 3, padding=1),  # 6 = 3(LR) + 3(latent)
+            nn.LeakyReLU(0.2, inplace=True)
+        ]
+
+        # 添加多個殘差塊進行深度特徵提取
+        for _ in range(self.num_res_blocks):
+            layers.append(ResidualBlock(num_channels))
+
+        # 中間卷積層
+        layers.extend([
+            nn.Conv2d(num_channels, num_channels, 3, padding=1),
+            nn.BatchNorm2d(num_channels)
+        ])
+
+        # 上採樣層
+        if scale_factor == 4:
+            # 兩次2x上採樣
+            layers.extend([
+                nn.Conv2d(num_channels, num_channels * 4, 3, padding=1),
+                nn.PixelShuffle(2),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(num_channels, num_channels * 4, 3, padding=1),
+                nn.PixelShuffle(2),
+                nn.LeakyReLU(0.2, inplace=True)
+            ])
+        else:
+            layers.extend([
+                nn.Conv2d(num_channels, num_channels * (scale_factor ** 2), 3, padding=1),
+                nn.PixelShuffle(scale_factor),
+                nn.LeakyReLU(0.2, inplace=True)
+            ])
+
+        # 最終輸出層
+        layers.append(nn.Conv2d(num_channels, 3, 3, padding=1))
+
+        return nn.Sequential(*layers)
     
     def forward(self, lr_image: torch.Tensor, view_idx: int) -> torch.Tensor:
         """CCSR前向傳播"""
         batch_size = lr_image.shape[0]
-        
+
         # 獲取潛在代碼
         latent_code = self.cclc(view_idx)
         latent_code = latent_code.unsqueeze(0).expand(batch_size, -1, -1, -1)
-        
+
         # 上採樣低分辨率圖像
         lr_upsampled = F.interpolate(lr_image, size=latent_code.shape[-2:], mode='bilinear', align_corners=False)
-        
+
         # 連接輸入
         combined_input = torch.cat([lr_upsampled, latent_code], dim=1)
-        
+
         # 生成超分辨率圖像
         sr_output = self.sr_network(combined_input)
-        sr_output = self.activation(sr_output)
-        sr_output = torch.clamp(sr_output, -1, 1)  # 匹配GRAF的圖像範圍 [-1, 1]
-        
-        # 應用CEM
+
+        # 使用tanh激活函數來匹配GRAF的圖像範圍 [-1, 1]
+        sr_output = torch.tanh(sr_output)
+
+        # 應用CEM進行一致性增強
         refined_sr = self.cem(sr_output, lr_image)
-        
+
         return refined_sr
