@@ -225,41 +225,53 @@ class Generator(object):
     def update_occupancy_grid_with_network(self, step, label, z_sample=None):
         """
         使用 NeRF 網路更新 occupancy grid（精確版本）
+        改進：使用多個隨機view directions的平均密度
         """
         if not self.use_nerfacc or self.estimator is None:
             return
-        
+
         network_fn = self.render_kwargs_train['network_fn']
         network_query_fn = self.render_kwargs_train['network_query_fn']
-        
+
         def occ_eval_fn(positions):
-            """使用 NeRF 網路評估密度"""
-            viewdirs = torch.zeros_like(positions)
-            viewdirs[..., 2] = -1.0
-            
-            features = z_sample if z_sample is not None else None
-            
+            """使用 NeRF 網路評估密度（多view平均）"""
             with torch.no_grad():
-                chunk_size = 65536
-                sigmas = []
-                for i in range(0, positions.shape[0], chunk_size):
-                    pos_chunk = positions[i:i+chunk_size]
-                    view_chunk = viewdirs[i:i+chunk_size]
-                    
-                    raw = network_query_fn(
-                        pos_chunk.unsqueeze(0),
-                        view_chunk,
-                        network_fn,
-                        label,
-                        features
-                    )
-                    sigma = torch.relu(raw[..., 3]).reshape(-1)
-                    sigmas.append(sigma)
-                
-                sigmas = torch.cat(sigmas, dim=0)
-            
-            return sigmas
-        
+                chunk_size = 32768  # 減小chunk避免OOM
+                n_views = 4  # 使用4個隨機view方向
+
+                # 生成多個隨機view directions
+                random_dirs = torch.randn(n_views, 3, device=positions.device)
+                random_dirs = F.normalize(random_dirs, dim=-1)
+
+                all_sigmas = []
+
+                # 對每個view direction評估密度
+                for view_dir in random_dirs:
+                    sigmas = []
+                    for i in range(0, positions.shape[0], chunk_size):
+                        pos_chunk = positions[i:i+chunk_size]
+                        n_pos = pos_chunk.shape[0]
+
+                        # 為這批位置使用相同的view direction
+                        view_chunk = view_dir.unsqueeze(0).expand(n_pos, 3)
+
+                        raw = network_query_fn(
+                            pos_chunk.unsqueeze(0),
+                            view_chunk,
+                            network_fn,
+                            label,
+                            z_sample
+                        )
+                        sigma = torch.relu(raw[0, :, 3])
+                        sigmas.append(sigma)
+
+                    all_sigmas.append(torch.cat(sigmas, dim=0))
+
+                # 取多個view的平均密度（更robust）
+                avg_sigmas = torch.stack(all_sigmas, dim=0).mean(dim=0)
+
+            return avg_sigmas
+
         self.estimator.update_every_n_steps(
             step=step,
             occ_eval_fn=occ_eval_fn,

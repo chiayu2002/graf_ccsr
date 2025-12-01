@@ -183,16 +183,21 @@ def render_nerfacc(H, W, focal, label, rays=None,
         N_rays = batch_rays_o.shape[0]
         
         # ========== 定義這個 batch 的查詢函數 ==========
-        def make_query_fn(feat, lbl):
-            def query_sigma(positions):
-                """查詢密度"""
+        def make_query_fn(feat, lbl, batch_vdirs):
+            def query_sigma(positions, ray_idx):
+                """查詢密度 - 使用對應ray的真實viewdir"""
                 N = positions.shape[0]
-                # 構造輸入: [1, N, 3]
-                pos_input = positions.unsqueeze(0)
-                # viewdirs: [1, 3] - 使用平均方向
-                vdir = torch.zeros(1, 3, device=device)
-                vdir[0, 2] = -1.0
-                
+                pos_input = positions.unsqueeze(0)  # [1, N, 3]
+
+                # 使用對應的viewdirs（每個position對應其ray的viewdir）
+                if batch_vdirs is not None:
+                    vdirs = batch_vdirs[ray_idx]  # [N, 3]
+                    # 取平均viewdir作為代表（因為network_query_fn需要[1, 3]）
+                    vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
+                else:
+                    vdir = torch.zeros(1, 3, device=device)
+                    vdir[0, 2] = -1.0
+
                 with torch.no_grad():
                     raw = network_query_fn(
                         pos_input,
@@ -201,21 +206,23 @@ def render_nerfacc(H, W, focal, label, rays=None,
                         lbl,
                         feat
                     )  # [1, N, 4]
-                
+
                 sigmas = torch.relu(raw[0, :, 3])  # [N]
                 return sigmas
-            
+
             def query_rgb_sigma(positions, viewdirs_sample):
-                """查詢 RGB 和 sigma"""
+                """查詢 RGB 和 sigma - 使用真實的viewdirs"""
                 N = positions.shape[0]
                 pos_input = positions.unsqueeze(0)  # [1, N, 3]
-                # viewdirs 需要是 [1, 3]，取第一個方向作為代表
+
+                # 使用傳入的真實viewdirs
                 if viewdirs_sample is not None and len(viewdirs_sample) > 0:
-                    vdir = viewdirs_sample[0:1]  # [1, 3]
+                    # 取平均viewdir（因為GRAF的network_query_fn接受[1, 3]的viewdir）
+                    vdir = viewdirs_sample.mean(dim=0, keepdim=True)  # [1, 3]
                 else:
                     vdir = torch.zeros(1, 3, device=device)
                     vdir[0, 2] = -1.0
-                
+
                 raw = network_query_fn(
                     pos_input,
                     vdir,
@@ -223,21 +230,21 @@ def render_nerfacc(H, W, focal, label, rays=None,
                     lbl,
                     feat
                 )  # [1, N, 4]
-                
+
                 rgbs = torch.sigmoid(raw[0, :, :3])  # [N, 3]
                 sigmas = torch.relu(raw[0, :, 3])  # [N]
                 return rgbs, sigmas
-            
+
             return query_sigma, query_rgb_sigma
         
-        query_sigma, query_rgb_sigma = make_query_fn(batch_feature, batch_label)
-        
+        query_sigma, query_rgb_sigma = make_query_fn(batch_feature, batch_label, batch_viewdirs)
+
         # ========== sigma_fn for NerfAcc ==========
         def sigma_fn(t_starts, t_ends, ray_indices):
             t_origins = batch_rays_o[ray_indices]
             t_dirs = batch_rays_d[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
-            return query_sigma(positions)
+            return query_sigma(positions, ray_indices)
         
         # ========== NerfAcc 射線採樣 ==========
         with torch.no_grad():

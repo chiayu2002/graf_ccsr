@@ -71,10 +71,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='configs/default.yaml')
     # ========== NerfAcc 參數 ==========
-    parser.add_argument('--occ_grid_update_interval', type=int, default=16, 
+    parser.add_argument('--occ_grid_update_interval', type=int, default=16,
                         help='Occupancy grid 更新間隔（每 N 步更新一次）')
-    parser.add_argument('--use_network_for_occ', action='store_true', default=False,
-                        help='使用網路更新 occupancy grid（更精確但較慢）')
+    parser.add_argument('--use_network_for_occ', action='store_true', default=True,
+                        help='使用網路更新 occupancy grid（更精確，帶來顯著加速）')
+    parser.add_argument('--use_simple_occ', action='store_true', default=False,
+                        help='使用簡單球形估計更新（快速但不準確，不推薦）')
     args = parser.parse_args()
 
     # load config
@@ -107,11 +109,13 @@ def main():
         print(f"[NerfAcc] Status: {nerfacc_status}")
         if generator.use_nerfacc:
             print(f"[NerfAcc] Occ grid update interval: {args.occ_grid_update_interval}")
-            print(f"[NerfAcc] Use network for occ: {args.use_network_for_occ}")
+            update_method = "Simple (sphere)" if args.use_simple_occ else "Network-based (accurate)"
+            print(f"[NerfAcc] Occ grid update method: {update_method}")
         print(f"{'='*50}\n")
         wandb.config.update({
             'nerfacc_enabled': generator.use_nerfacc,
             'occ_grid_update_interval': args.occ_grid_update_interval,
+            'use_simple_occ': args.use_simple_occ,
         })
 
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
@@ -199,13 +203,13 @@ def main():
             # ========== NerfAcc: 更新 Occupancy Grid ==========
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
                 if it % args.occ_grid_update_interval == 0:
-                    if args.use_network_for_occ:
-                        # 使用網路更新（更精確但較慢）
+                    if args.use_simple_occ:
+                        # 使用簡單球形估計更新（快速但不準確）
+                        generator.update_occupancy_grid(it)
+                    else:
+                        # 使用網路更新（更精確，默認選項）
                         z_sample = zdist.sample((1,))
                         generator.update_occupancy_grid_with_network(it, label, z_sample)
-                    else:
-                        # 使用簡單球形估計更新（快速）
-                        generator.update_occupancy_grid(it)
 
             # Discriminator updates
             d_optimizer.zero_grad()
@@ -247,6 +251,12 @@ def main():
             z = zdist.sample((batch_size,))
             x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
             d_fake, label_fake = discriminator(x_fake, label)
+
+            # ========== NerfAcc 性能監控 ==========
+            # 檢查是否有採樣統計信息（由render_nerfacc返回）
+            if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc and it % 100 == 0:
+                # extras信息在generator內部，這裡我們只是打個標記
+                pass  # 實際統計在render_nerfacc中的extras
 
             gloss = compute_loss(d_fake, 1) 
             ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)

@@ -80,7 +80,11 @@ wandb:
   entity: vicky20020808
   name: RS307_test_noacc
 nerfacc:
-  use_nerfacc: true        # 設為 false 可禁用 NerfAcc
-  resolution: 128          # Occupancy grid 解析度 (64, 128, 256)
+  use_nerfacc: true        # 啟用 NerfAcc 加速（建議開啟）
+  resolution: 128          # Occupancy grid 解析度 (推薦: 128, 可選: 64, 256)
+                           # 越高越精確但記憶體佔用越大
   render_step_size: null   # null = 自動計算 (far-near)/N_samples
-  # render_step_size: 0.047  # 或手動指定: (4.5-1.5)/64 = 0.047
+                           # 或手動指定: 0.047 = (4.5-1.5)/64
+
+# 重要：訓練時使用 --use_network_for_occ 來獲得真正的加速效果
+# 簡單的球形估計無法帶來加速，必須使用網路更新occupancy grid
