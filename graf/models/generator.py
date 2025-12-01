@@ -1,11 +1,16 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
+from functools import partial
+
+# NerfAcc imports
+import nerfacc
+from nerfacc import OccGridEstimator
+
 from ..utils import sample_on_sphere, look_at, to_sphere 
 from graf.transforms import ImgToPatch
 from ..transforms import FullRaySampler
-from submodules.nerf_pytorch.run_nerf_mod import render, run_network            # import conditional render
-from functools import partial
-import torch.nn.functional as F  
+from submodules.nerf_pytorch.run_nerf_mod import render, render_nerfacc
 from graf.models.ccsr import CCSR
 import os
 import pickle
@@ -13,7 +18,15 @@ import pickle
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49),v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, use_ccsr=True, num_views=8):
+                 range_u=(0,1), range_v=(0.01,0.49), v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, 
+                 use_ccsr=True, num_views=8,
+                 # ========== NerfAcc 參數 ==========
+                 use_nerfacc=True,
+                 near=1.5,
+                 far=4.5,
+                 nerfacc_resolution=128,
+                 render_step_size=None):
+        
         self.device = device
         self.H = int(H)
         self.W = int(W)
@@ -25,11 +38,16 @@ class Generator(object):
         self.v = v
         self.use_default_rays = use_default_rays
         self.use_ccsr = use_ccsr
-
+        
+        # ========== NerfAcc 設定 ==========
+        self.use_nerfacc = use_nerfacc
+        self.near = near
+        self.far = far
+        
         coords = torch.from_numpy(np.stack(np.meshgrid(np.arange(H), np.arange(W), indexing='ij'), -1))
         self.coords = coords.view(-1, 2)
 
-        self.ray_sampler = ray_sampler   #FlexGridRaySampler
+        self.ray_sampler = ray_sampler
         self.val_ray_sampler = FullRaySampler(orthographic=orthographic)
         self.render_kwargs_train = render_kwargs_train
         self.render_kwargs_test = render_kwargs_test
@@ -41,9 +59,39 @@ class Generator(object):
             if module is not None:
                 self.module_dict[name] = module
 
-        # 添加CCSR模組
+        # ========== 初始化 NerfAcc OccGridEstimator ==========
+        if self.use_nerfacc:
+            # 根據場景設定 AABB（場景邊界框）
+            aabb_scale = radius * 1.5
+            scene_aabb = torch.tensor([
+                -aabb_scale, -aabb_scale, -aabb_scale,
+                 aabb_scale,  aabb_scale,  aabb_scale
+            ], dtype=torch.float32, device=device)
+            
+            self.estimator = OccGridEstimator(
+                roi_aabb=scene_aabb,
+                resolution=nerfacc_resolution,
+                levels=1
+            ).to(device)
+            
+            # 渲染步長
+            if render_step_size is None:
+                N_samples = render_kwargs_train.get('N_samples', 64)
+                self.render_step_size = (far - near) / N_samples
+            else:
+                self.render_step_size = render_step_size
+                
+            print(f"[NerfAcc] Initialized:")
+            print(f"  - AABB: [{-aabb_scale:.2f}, {aabb_scale:.2f}]^3")
+            print(f"  - Resolution: {nerfacc_resolution}")
+            print(f"  - Render step size: {self.render_step_size:.4f}")
+            print(f"  - Near: {near}, Far: {far}")
+        else:
+            self.estimator = None
+            self.render_step_size = None
+
+        # 添加 CCSR 模組
         if self.use_ccsr:
-            # 假設低分辨率圖像尺寸為原圖的1/4
             lr_height, lr_width = H // 4, W // 4
             self.ccsr = CCSR(num_views=num_views, lr_height=lr_height, lr_width=lr_width, scale_factor=4).to(device)
             self.module_dict['ccsr'] = self.ccsr
@@ -58,12 +106,14 @@ class Generator(object):
         self.named_parameters = lambda: self._named_parameters
 
         self.use_test_kwargs = False
+        
+        # 設定原始 render 函數
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
     def __call__(self, z, label, rays=None, return_ccsr_output=False):
         bs = z.shape[0]
         if rays is None:
-            if self.use_default_rays :
+            if self.use_default_rays:
                 rays = torch.cat([self.sample_rays() for _ in range(bs)], dim=1)
             else:
                 all_rays = []
@@ -71,75 +121,150 @@ class Generator(object):
 
                 for i in range(label.size(0)):
                     second_value = label[i, 1].item()
-                    index = int(label[i, 2].item())  # 得到第3個值
+                    index = int(label[i, 2].item())
 
-                    # 基礎 u v值計算
                     selected_u = index / 360
                     selected_v = v_list[int(second_value)]
 
-                    # 使用選定的角度生成光線
                     rays = self.sample_select_rays(selected_u, selected_v)
                     all_rays.append(rays)
                     
                 rays = torch.cat(all_rays, dim=1)
 
-
         render_kwargs = self.render_kwargs_test if self.use_test_kwargs else self.render_kwargs_train
-        render_kwargs = dict(render_kwargs)        # copy
-
+        render_kwargs = dict(render_kwargs)  # 複製一份
         render_kwargs['features'] = z
-        rgb, disp, acc, extras = render(self.H, self.W, self.focal, label, chunk=self.chunk, rays=rays,
-                                        **render_kwargs)
 
-        rays_to_output = lambda x: x.view(len(x), -1) * 2 - 1      # (BxN_samples)xC
+        # ========== 渲染 ==========
+        # 評估模式使用原始方法（更穩定），訓練模式使用 NerfAcc（更快）
+        if self.use_nerfacc and not self.use_test_kwargs:
+            # NerfAcc 渲染 - 只在訓練時使用
+            rgb, disp, acc, extras = render_nerfacc(
+                self.H, self.W, self.focal, label,
+                rays=rays,
+                near=self.near, 
+                far=self.far,
+                use_viewdirs=render_kwargs.get('use_viewdirs', True),
+                estimator=self.estimator,
+                render_step_size=self.render_step_size,
+                # 只傳遞 render_nerfacc 需要的參數
+                network_fn=render_kwargs['network_fn'],
+                network_query_fn=render_kwargs['network_query_fn'],
+                features=render_kwargs.get('features'),
+                network_fine=render_kwargs.get('network_fine'),
+            )
+        else:
+            # 原本的渲染 - 評估時使用
+            rgb, disp, acc, extras = render(
+                self.H, self.W, self.focal, label,
+                chunk=self.chunk, rays=rays,
+                **render_kwargs
+            )
+
+        rays_to_output = lambda x: x.view(len(x), -1) * 2 - 1
     
-        if self.use_test_kwargs:               # return all outputs
+        if self.use_test_kwargs:
             return rays_to_output(rgb), \
                    rays_to_output(disp), \
                    rays_to_output(acc), extras
 
         rgb = rays_to_output(rgb)
 
-        # 如果啟用CCSR並且需要返回CCSR輸出
+        # CCSR 處理
         ccsr_output = None
         if self.use_ccsr and return_ccsr_output:
-            # 將NeRF輸出轉換為圖像格式進行CCSR處理
-            # 這裡需要根據您的patch採樣方式調整
             total_elements = rgb.numel()
             rgb_nerf = rgb.view(bs, total_elements // (bs * 3), 3)
             nerf_images = rgb_nerf.view(bs, int(np.sqrt(rgb_nerf.shape[1])), int(np.sqrt(rgb_nerf.shape[1])), 3).permute(0, 3, 1, 2)
             
-            # 生成低分辨率版本
             patch_size = 64
             lr_size = max(8, patch_size // 4)
             lr_images = F.interpolate(nerf_images, size=(lr_size, lr_size), mode='bilinear', align_corners=False)
             
-            # 對每個樣本應用CCSR
             ccsr_results = []
             for i in range(bs):
-                # 使用label中的信息確定視角索引
-                # view_idx = int(label[i, 2].item()) if label.shape[1] > 2 else i
                 angle_idx = int(label[i, 2].item())
-                # 將 360 個角度映射到 8 個視角
-                view_idx = (angle_idx * 8) // 360  # 0-7 的範圍
+                view_idx = (angle_idx * 8) // 360
                 ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
-                # view_idx = 72
-                # ccsr_result = self.ccsr(lr_images[i:i+1], view_idx)
                 ccsr_results.append(ccsr_result)
             
-            ccsr_combined  = torch.cat(ccsr_results, dim=0)
+            ccsr_combined = torch.cat(ccsr_results, dim=0)
             ccsr_resized = F.interpolate(ccsr_combined, size=(patch_size, patch_size), 
-                                       mode='bilinear', align_corners=False)
-            # 轉換為與NeRF輸出相同的格式
-            # ccsr_output = ccsr_resized.permute(0, 2, 3, 1).view(bs, -1, 3) * 2 - 1
+                                        mode='bilinear', align_corners=False)
 
         if return_ccsr_output:
             ccsr_output = ccsr_resized.permute(0, 2, 3, 1).contiguous().view(-1, 3)
             return rgb, rays, ccsr_output
         else:
             return rgb, rays
+
+    def update_occupancy_grid(self, step):
+        """
+        更新 occupancy grid（簡單版本）
+        使用球形估計
+        """
+        if not self.use_nerfacc or self.estimator is None:
+            return
+            
+        def occ_eval_fn(positions):
+            """基於球形的簡單佔據估計"""
+            dist = torch.norm(positions, dim=-1)
+            density = torch.where(
+                dist < self.radius,
+                torch.ones_like(dist),
+                torch.zeros_like(dist)
+            )
+            return density
         
-        # return rgb, rays
+        self.estimator.update_every_n_steps(
+            step=step,
+            occ_eval_fn=occ_eval_fn,
+            occ_thre=1e-2,
+        )
+
+    def update_occupancy_grid_with_network(self, step, label, z_sample=None):
+        """
+        使用 NeRF 網路更新 occupancy grid（精確版本）
+        """
+        if not self.use_nerfacc or self.estimator is None:
+            return
+        
+        network_fn = self.render_kwargs_train['network_fn']
+        network_query_fn = self.render_kwargs_train['network_query_fn']
+        
+        def occ_eval_fn(positions):
+            """使用 NeRF 網路評估密度"""
+            viewdirs = torch.zeros_like(positions)
+            viewdirs[..., 2] = -1.0
+            
+            features = z_sample if z_sample is not None else None
+            
+            with torch.no_grad():
+                chunk_size = 65536
+                sigmas = []
+                for i in range(0, positions.shape[0], chunk_size):
+                    pos_chunk = positions[i:i+chunk_size]
+                    view_chunk = viewdirs[i:i+chunk_size]
+                    
+                    raw = network_query_fn(
+                        pos_chunk.unsqueeze(0),
+                        view_chunk,
+                        network_fn,
+                        label,
+                        features
+                    )
+                    sigma = torch.relu(raw[..., 3]).reshape(-1)
+                    sigmas.append(sigma)
+                
+                sigmas = torch.cat(sigmas, dim=0)
+            
+            return sigmas
+        
+        self.estimator.update_every_n_steps(
+            step=step,
+            occ_eval_fn=occ_eval_fn,
+            occ_thre=1e-2,
+        )
 
     def decrease_nerf_noise(self, it):
         end_it = 5000
@@ -147,13 +272,8 @@ class Generator(object):
             noise_std = self.initial_raw_noise_std - self.initial_raw_noise_std/end_it * it
             self.render_kwargs_train['raw_noise_std'] = noise_std
 
-    def sample_pose(self):   #計算旋轉矩陣(相機姿勢)  train
-        # sample location on unit sphere
-        #print("Type of self.v:", type(self.v))
+    def sample_pose(self):
         loc = sample_on_sphere(self.range_u, self.range_v)
-        # loc = to_sphere(u, v)
-        
-        # sample radius if necessary
         radius = self.radius
         if isinstance(radius, tuple):
             radius = np.random.uniform(*radius)
@@ -165,15 +285,8 @@ class Generator(object):
         RT = torch.Tensor(RT.astype(np.float32))
         return RT
 
-
-    def sample_select_pose(self, u, v):   #計算旋轉矩陣(相機姿勢)
-        # sample location on unit sphere
-        #print("Type of self.v:", type(self.v))
-        
-        # sample radius if necessary
+    def sample_select_pose(self, u, v):
         radius = self.radius
-        
-        # 正常的球面取樣
         loc = to_sphere(u, v) * radius
         R = look_at(loc)[0]
         
@@ -182,22 +295,22 @@ class Generator(object):
         
         return RT
   
-    def sample_rays(self):   #設train用的rays
+    def sample_rays(self):
         pose = self.sample_pose()
-        # print(f"`trainpose`:{pose}")
         sampler = self.val_ray_sampler if self.use_test_kwargs else self.ray_sampler 
         batch_rays, _, _ = sampler(self.H, self.W, self.focal, pose)
-        return batch_rays #torch.Size([2, 1024, 3])
+        return batch_rays
     
-    def sample_select_rays(self, u ,v):
+    def sample_select_rays(self, u, v):
         pose = self.sample_select_pose(u, v)
-        #print(f"trainpose:{pose}")
-        sampler = self.val_ray_sampler if self.use_test_kwargs else self.ray_sampler  #如果 self.use_test_kwargs 為真，則使用 self.val_ray_sampler
+        sampler = self.val_ray_sampler if self.use_test_kwargs else self.ray_sampler
         batch_rays, _, _ = sampler(self.H, self.W, self.focal, pose)
         return batch_rays
 
     def to(self, device):
         self.render_kwargs_train['network_fn'].to(device)
+        if self.use_nerfacc and self.estimator is not None:
+            self.estimator.to(device)
         self.device = device
         return self
 
@@ -208,5 +321,3 @@ class Generator(object):
     def eval(self):
         self.use_test_kwargs = True
         self.render_kwargs_train['network_fn'].eval()
-
-    
