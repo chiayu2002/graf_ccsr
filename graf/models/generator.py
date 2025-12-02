@@ -248,16 +248,15 @@ class Generator(object):
                 # 對每個view direction評估密度
                 for view_dir in random_dirs:
                     sigmas = []
+                    # view_dir 保持 [1, 3] 形狀，run_network會自動expand到所有采樣點
+                    view_input = view_dir.unsqueeze(0)  # [1, 3]
+
                     for i in range(0, positions.shape[0], chunk_size):
                         pos_chunk = positions[i:i+chunk_size]
-                        n_pos = pos_chunk.shape[0]
-
-                        # 為這批位置使用相同的view direction
-                        view_chunk = view_dir.unsqueeze(0).expand(n_pos, 3)
 
                         raw = network_query_fn(
-                            pos_chunk.unsqueeze(0),
-                            view_chunk,
+                            pos_chunk.unsqueeze(0),  # [1, n_pos, 3]
+                            view_input,               # [1, 3]
                             network_fn,
                             label,
                             z_sample
