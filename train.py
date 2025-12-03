@@ -203,7 +203,6 @@ def main():
             # ========== NerfAcc: 更新 Occupancy Grid ==========
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
                 if it % args.occ_grid_update_interval == 0:
-                    import time
                     torch.cuda.synchronize()
                     occ_start = time.time()
 
