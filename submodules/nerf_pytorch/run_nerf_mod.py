@@ -261,20 +261,25 @@ def render_nerfacc(H, W, focal, label, rays=None,
             )
         
         # ========== 渲染這個 batch ==========
+        # 初始化默认值，确保变量总是被定义
+        rgb_map = torch.zeros(N_rays, 3, device=device)
+        acc_map = torch.zeros(N_rays, device=device)
+        depth_map = torch.zeros(N_rays, device=device)
+
         if len(ray_indices) > 0:
             # 計算採樣點位置
             t_origins = batch_rays_o[ray_indices]
             t_dirs = batch_rays_d[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
-            
+
             if batch_viewdirs is not None:
                 vdirs = batch_viewdirs[ray_indices]
             else:
                 vdirs = None
-            
+
             # 查詢 RGB 和 sigma
             rgbs, sigmas = query_rgb_sigma(positions, vdirs)
-            
+
             # 計算權重
             weights, trans, alphas = render_weight_from_density(
                 t_starts=t_starts,
@@ -283,7 +288,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 ray_indices=ray_indices,
                 n_rays=N_rays,
             )
-            
+
             # 累積顏色
             rgb_map = accumulate_along_rays(
                 weights=weights,
@@ -291,7 +296,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 values=rgbs,
                 n_rays=N_rays,
             )
-            
+
             # 累積不透明度
             acc_map = accumulate_along_rays(
                 weights=weights,
@@ -315,10 +320,6 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 depth_map = depth_map.reshape(N_rays)
 
             total_samples += len(t_starts)
-        else:
-            rgb_map = torch.zeros(N_rays, 3, device=device)
-            acc_map = torch.zeros(N_rays, device=device)
-            depth_map = torch.zeros(N_rays, device=device)
 
         # 計算 disparity（確保所有輸入都是 1D）
         disp_map = 1.0 / torch.clamp(depth_map / (acc_map + 1e-10), min=1e-10)
