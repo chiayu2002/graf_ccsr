@@ -256,10 +256,16 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 far_plane=far,
                 render_step_size=render_step_size,
                 early_stop_eps=1e-4,
-                alpha_thre=0.01,  # 🔧 修復：設置合理閾值以跳過低密度區域
+                alpha_thre=0.001,  # 🔧 降低閾值避免跳過太多區域（從0.01改為0.001）
                 stratified=True,
             )
-        
+
+        # ========== 安全檢查：採樣點數過少的警告 ==========
+        n_samples_this_batch = len(ray_indices)
+        if n_samples_this_batch < N_rays * 5:  # 平均每條ray少於5個採樣點
+            import warnings
+            warnings.warn(f"Very few samples: {n_samples_this_batch} for {N_rays} rays. Consider lowering alpha_thre.")
+
         # ========== 渲染這個 batch ==========
         # 初始化默认值，确保变量总是被定义
         rgb_map = torch.zeros(N_rays, 3, device=device)
