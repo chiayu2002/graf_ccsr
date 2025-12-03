@@ -299,22 +299,28 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 values=None,
                 n_rays=N_rays,
             )
-            
+            # 確保 acc_map 是 1D: [N_rays]
+            if acc_map.dim() > 1:
+                acc_map = acc_map.reshape(N_rays)
+
             # 累積深度
             depth_map = accumulate_along_rays(
                 weights=weights,
                 ray_indices=ray_indices,
                 values=(t_starts + t_ends)[:, None] / 2.0,
                 n_rays=N_rays,
-            ).squeeze(-1)
-            
+            )
+            # 確保 depth_map 是 1D: [N_rays]
+            if depth_map.dim() > 1:
+                depth_map = depth_map.reshape(N_rays)
+
             total_samples += len(t_starts)
         else:
             rgb_map = torch.zeros(N_rays, 3, device=device)
             acc_map = torch.zeros(N_rays, device=device)
             depth_map = torch.zeros(N_rays, device=device)
-        
-        # 計算 disparity
+
+        # 計算 disparity（確保所有輸入都是 1D）
         disp_map = 1.0 / torch.clamp(depth_map / (acc_map + 1e-10), min=1e-10)
         
         all_rgb.append(rgb_map)
