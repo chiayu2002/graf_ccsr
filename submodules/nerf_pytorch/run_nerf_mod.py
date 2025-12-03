@@ -256,7 +256,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 far_plane=far,
                 render_step_size=render_step_size,
                 early_stop_eps=1e-4,
-                alpha_thre=0.0,
+                alpha_thre=0.01,  # 🔧 修復：設置合理閾值以跳過低密度區域
                 stratified=True,
             )
         
@@ -325,11 +325,18 @@ def render_nerfacc(H, W, focal, label, rays=None,
     rgb_final = torch.cat(all_rgb, dim=0)  # [N_rays_total, 3]
     disp_final = torch.cat(all_disp, dim=0)  # [N_rays_total]
     acc_final = torch.cat(all_acc, dim=0)  # [N_rays_total]
-    
+
+    # 計算理論採樣點數（如果不使用NerfAcc）
+    theoretical_samples = N_rays_total * int((far - near) / render_step_size)
+    sample_reduction_pct = (1 - total_samples / theoretical_samples) * 100 if theoretical_samples > 0 else 0
+
     extras = {
         'n_samples': total_samples,
+        'n_rays': N_rays_total,
+        'theoretical_samples': theoretical_samples,
+        'sample_reduction': sample_reduction_pct,
     }
-    
+
     return [rgb_final, disp_final, acc_final, extras]
 
 

@@ -203,6 +203,10 @@ def main():
             # ========== NerfAcc: 更新 Occupancy Grid ==========
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
                 if it % args.occ_grid_update_interval == 0:
+                    import time
+                    torch.cuda.synchronize()
+                    occ_start = time.time()
+
                     if args.use_simple_occ:
                         # 使用簡單球形估計更新（快速但不準確）
                         generator.update_occupancy_grid(it)
@@ -210,6 +214,11 @@ def main():
                         # 使用網路更新（更精確，默認選項）
                         z_sample = zdist.sample((1,))
                         generator.update_occupancy_grid_with_network(it, label, z_sample)
+
+                    torch.cuda.synchronize()
+                    occ_time = (time.time() - occ_start) * 1000
+                    if it % (args.occ_grid_update_interval * 10) == 0:
+                        print(f"[NerfAcc] Occupancy grid updated in {occ_time:.1f} ms")
 
             # Discriminator updates
             d_optimizer.zero_grad()
@@ -253,10 +262,14 @@ def main():
             d_fake, label_fake = discriminator(x_fake, label)
 
             # ========== NerfAcc 性能監控 ==========
-            # 檢查是否有採樣統計信息（由render_nerfacc返回）
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc and it % 100 == 0:
-                # extras信息在generator內部，這裡我們只是打個標記
-                pass  # 實際統計在render_nerfacc中的extras
+                if hasattr(generator, 'last_render_extras') and generator.last_render_extras:
+                    extras = generator.last_render_extras
+                    if 'n_samples' in extras and 'theoretical_samples' in extras:
+                        actual = extras['n_samples']
+                        theoretical = extras['theoretical_samples']
+                        reduction = extras.get('sample_reduction', 0)
+                        print(f"[NerfAcc] Iter {it}: Samples {actual}/{theoretical} ({reduction:.1f}% reduction)")
 
             gloss = compute_loss(d_fake, 1) 
             ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)

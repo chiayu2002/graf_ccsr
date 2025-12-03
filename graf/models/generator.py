@@ -162,13 +162,16 @@ class Generator(object):
             )
 
         rays_to_output = lambda x: x.view(len(x), -1) * 2 - 1
-    
+
         if self.use_test_kwargs:
             return rays_to_output(rgb), \
                    rays_to_output(disp), \
                    rays_to_output(acc), extras
 
         rgb = rays_to_output(rgb)
+
+        # 保存extras用於性能監控
+        self.last_render_extras = extras
 
         # CCSR 處理
         ccsr_output = None
