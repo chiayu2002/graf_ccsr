@@ -240,7 +240,7 @@ class Generator(object):
             """使用 NeRF 網路評估密度（多view平均）"""
             with torch.no_grad():
                 chunk_size = 32768  # 減小chunk避免OOM
-                n_views = 4  # 使用4個隨機view方向
+                n_views = 1  # 🔧 從 4 改為 1 以減少開銷（可提高到 2-4 如果速度允許）
 
                 # 生成多個隨機view directions
                 random_dirs = torch.randn(n_views, 3, device=positions.device)

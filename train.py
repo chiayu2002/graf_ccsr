@@ -71,8 +71,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='configs/default.yaml')
     # ========== NerfAcc 參數 ==========
-    parser.add_argument('--occ_grid_update_interval', type=int, default=16,
-                        help='Occupancy grid 更新間隔（每 N 步更新一次）')
+    parser.add_argument('--occ_grid_update_interval', type=int, default=128,
+                        help='Occupancy grid 更新間隔（每 N 步更新一次）- 降低頻率以減少開銷')
     parser.add_argument('--use_network_for_occ', action='store_true', default=True,
                         help='使用網路更新 occupancy grid（更精確，帶來顯著加速）')
     parser.add_argument('--use_simple_occ', action='store_true', default=False,
