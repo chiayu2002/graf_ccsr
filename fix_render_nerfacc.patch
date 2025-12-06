@@ -1,0 +1,108 @@
+# 关键修复：render_nerfacc 的性能瓶颈
+
+## 问题诊断
+
+当前实现在 `for b in range(bs)` 循环内调用 `estimator.sampling()`：
+
+```python
+for b in range(bs):  # bs=8，循环 8 次！
+    # ... 准备这个 batch 的数据 ...
+
+    # ❌ 问题：每个 batch 都调用一次！
+    ray_indices, t_starts, t_ends = estimator.sampling(
+        rays_o=batch_rays_o,
+        rays_d=batch_rays_d,
+        sigma_fn=sigma_fn,
+        ...
+    )
+```
+
+这导致：
+- `estimator.sampling()` 被调用 **8 次**（batch_size=8）
+- 每次调用都要查询 occupancy grid
+- 每次调用 `sigma_fn` 都要做网络前向传播
+- **总开销是原本的 8 倍！**
+
+## 根本原因
+
+对比原始的 `render()` 函数：
+
+```python
+# 原始 render：一次性处理所有 rays
+if kwargs.get('features') is not None:
+    bs = kwargs['features'].shape[0]
+    N_rays = sh[0] // bs
+    # 扩展 features 到所有 rays
+    kwargs['features'] = kwargs['features'].unsqueeze(1).expand(-1, N_rays, -1).flatten(0, 1)
+
+# 一次性处理所有 rays（不分 batch）
+all_ret = batchify_rays(rays, label, chunk, **kwargs)
+```
+
+而 `render_nerfacc` 错误地按 batch 分别处理，导致重复调用开销大的函数。
+
+## 解决方案
+
+有两个选择：
+
+### 方案 A：调用一次 estimator.sampling()（推荐）⭐
+
+```python
+# 1. 准备所有 rays（不分 batch）
+rays_o = torch.reshape(rays_o, [-1, 3]).float()
+rays_d = torch.reshape(rays_d, [-1, 3]).float()
+
+# 2. 定义统一的 sigma_fn（使用第一个 batch 的 feature）
+def sigma_fn_unified(t_starts, t_ends, ray_indices):
+    # 使用第一个 batch 的 feature 作为代表
+    # （occupancy grid 主要依赖几何，不太依赖 feature）
+    ...
+    return sigmas
+
+# 3. ⭐ 只调用一次 estimator.sampling()
+ray_indices, t_starts, t_ends = estimator.sampling(
+    rays_o=rays_o,  # 所有 rays
+    rays_d=rays_d,
+    sigma_fn=sigma_fn_unified,
+    ...
+)
+
+# 4. 按 ray 所属的 batch 分组采样点
+for b in range(bs):
+    # 找出属于这个 batch 的 ray_indices
+    batch_start = b * n_rays_per_batch
+    batch_end = (b + 1) * n_rays_per_batch
+
+    # 筛选采样点
+    mask = (ray_indices >= batch_start) & (ray_indices < batch_end)
+    batch_ray_indices = ray_indices[mask] - batch_start
+    batch_t_starts = t_starts[mask]
+    batch_t_ends = t_ends[mask]
+
+    # 用这个 batch 的 feature 查询 RGB
+    ...
+```
+
+### 方案 B：完全移除 batch 循环（最优，需要重构）
+
+像原始 `render()` 一样扩展 features，完全不分 batch。
+
+## 实现细节
+
+方案 A 的完整实现在下一个文件中。
+
+关键点：
+1. `estimator.sampling()` 调用次数：8 次 → 1 次 （8× 减少）
+2. Occupancy grid 查询：8 次 → 1 次
+3. sigma_fn 调用总次数：减少（虽然每个 ray 还是要查，但避免了重复）
+
+预期加速：**2-3×**
+
+## 为什么之前的优化没用
+
+之前的优化（降低 resolution、减少 update频率）只解决了 occupancy grid **更新**的开销，但没有解决 **查询**（sampling）的开销。
+
+- Grid 更新：每 128 步一次（已优化）
+- Grid 查询：**每步 8 次**（未优化） ← 这是当前的瓶颈！
+
+所以即使 grid 更新很快，每步还是要查询 8 次 grid，导致速度没提升。
