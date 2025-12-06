@@ -1,0 +1,71 @@
+# 最小化测试配置 - 完全回归基础GRAF
+expname: test_basic_graf
+data:
+  datadir: [data/RS307_n]
+  far: 4.5
+  fov: 20
+  imsize: 64  # 降低分辨率加快测试
+  near: 1.5
+  orthographic: False
+  use_default_rays: False
+  radius: 2.5
+  type: RS307_0_i2
+  umax: 1.
+  umin: 0.
+  vmax: 0.5
+  vmin: 0.
+  v: 0.5, 0.4, 0.3, 0.2
+
+discriminator:
+  num_classes: 1
+  hflip: false
+  ndf: 64
+
+nerf:
+  N_samples: 32  # 减少采样点加快测试
+  decrease_noise: false  # 关闭noise衰减
+  i_embed: 0
+  multires: 6  # 降低频率
+  multires_views: 2
+  netdepth: 4  # 简化网络
+  netwidth: 128
+  perturb: 0.0  # 完全关闭扰动
+  raw_noise_std: 0.0  # 完全关闭噪声
+  use_viewdirs: true
+  N_importance: 0
+  netdepth_fine: 4
+  netwidth_fine: 128
+
+ray_sampler:
+  N_samples: 1024  # 减少ray数量
+  max_scale: 1.0
+  min_scale: 0.25
+  scale_anneal: 0.0025
+
+training:
+  batch_size: 4  # 减少batch size
+  chunk: 8192
+  gan_type: standard
+  lr_d: 0.0001  # 使用标准学习率
+  lr_g: 0.0004
+  netchunk: 32768
+  optimizer: rmsprop
+  print_every: 10
+  reg_param: 10.0  # 大幅降低
+  sample_every: 100
+  save_every: 1000
+
+z_dist:
+  dim: 128  # 减少latent维度
+  type: gauss
+
+ccsr:
+  enabled: False
+
+wandb:
+  project: graf251105
+  entity: vicky20020808
+  name: test_basic_graf
+
+nerfacc:
+  use_nerfacc: false
