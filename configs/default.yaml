@@ -49,7 +49,7 @@ training:
   gan_type: standard
   lr_anneal: 0.5
   lr_anneal_every: 80000,120000,150000
-  lr_d: 0.0001
+  lr_d: 0.00005  # 降低Discriminator學習率（從0.0001降到0.00005）
   lr_g: 0.0006
   model_average_beta: 0.999
   model_average_reinit: false
@@ -59,7 +59,7 @@ training:
   optimizer: rmsprop
   outdir: ./results
   print_every: 10
-  reg_param: 80.0
+  reg_param: 40.0  # 降低梯度懲罰（從80降到40）
   restart_every: -1
   sample_every: 500
   save_best: fid
@@ -80,11 +80,11 @@ wandb:
   entity: vicky20020808
   name: RS307_test_noacc
 nerfacc:
-  use_nerfacc: true        # 啟用 NerfAcc 加速（建議開啟）
+  use_nerfacc: false       # ⚠️ 暫時禁用 NerfAcc - 先確認模型能正常訓練
   resolution: 128          # Occupancy grid 解析度 (推薦: 128, 可選: 64, 256)
                            # 越高越精確但記憶體佔用越大
   render_step_size: null   # null = 自動計算 (far-near)/N_samples
                            # 或手動指定: 0.047 = (4.5-1.5)/64
 
-# 重要：訓練時使用 --use_network_for_occ 來獲得真正的加速效果
-# 簡單的球形估計無法帶來加速，必須使用網路更新occupancy grid
+# 注意：當前訓練結果不佳，暫時禁用 NerfAcc 以排查問題
+# 等模型能生成清晰圖像後，再逐步啟用 NerfAcc 加速
