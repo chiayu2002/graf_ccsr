@@ -30,7 +30,7 @@ nerf:
   netdepth: 8
   netwidth: 256
   perturb: 1.0
-  raw_noise_std: 1.0
+  raw_noise_std: 0.1  # 降低噪聲（從1.0降到0.1），讓訓練更穩定
   use_viewdirs: true
   N_importance: 0
   netdepth_fine: 8
@@ -49,8 +49,8 @@ training:
   gan_type: standard
   lr_anneal: 0.5
   lr_anneal_every: 80000,120000,150000
-  lr_d: 0.00005  # 降低Discriminator學習率（從0.0001降到0.00005）
-  lr_g: 0.0006
+  lr_d: 0.00002  # 大幅降低Discriminator學習率（從0.00005降到0.00002）
+  lr_g: 0.0008    # 提高Generator學習率（從0.0006提高到0.0008）
   model_average_beta: 0.999
   model_average_reinit: false
   model_file: model.pt
@@ -59,7 +59,7 @@ training:
   optimizer: rmsprop
   outdir: ./results
   print_every: 10
-  reg_param: 40.0  # 降低梯度懲罰（從80降到40）
+  reg_param: 20.0  # 進一步降低梯度懲罰（從40降到20）
   restart_every: -1
   sample_every: 500
   save_best: fid
@@ -69,8 +69,8 @@ z_dist:
   dim: 256
   # dim_appearance: 128 
   type: gauss
-ccsr: 
-    enabled: True,
+ccsr:
+    enabled: False  # ⚠️ 暫時完全禁用 CCSR - 先讓 GRAF 本身能正常訓練
     num_views: 8,
     scale_factor: 4,
     alpha_init: 1.0,
