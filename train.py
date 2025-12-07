@@ -155,6 +155,17 @@ def main():
     g_optimizer = optim.RMSprop(g_params, lr=lr_g, alpha=0.99, eps=1e-8)
     d_optimizer = optim.RMSprop(d_params, lr=lr_d, alpha=0.99, eps=1e-8)
 
+    # 🔧 GAN 優化：混合精度訓練
+    use_amp = config['training'].get('use_amp', False)
+    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    reg_every = config['training'].get('reg_every', 1)  # 梯度懲罰頻率
+
+    if use_amp:
+        print(f"\n[Optimization] Mixed Precision Training: Enabled")
+    if reg_every > 1:
+        print(f"[Optimization] Gradient Penalty Frequency: every {reg_every} steps (saving ~{(1-1/reg_every)*100:.0f}% computation)")
+    print()
+
     # get patch
     hwfr = config['data']['hwfr']
     img_to_patch = ImgToPatch(generator.ray_sampler, hwfr[:3])
@@ -234,23 +245,59 @@ def main():
             rgbs.requires_grad_(True)
 
             z = zdist.sample((batch_size,))
-            
-            # real data
-            d_real, label_real = discriminator(rgbs, label)
-            dloss_real = compute_loss(d_real, 1)
-            reg = 80. * compute_grad2(d_real, rgbs).mean()
-            
-            # fake data
-            with torch.no_grad():
-                x_fake, _ = generator(z, label)
-            x_fake.requires_grad_()
 
-            d_fake, _ = discriminator(x_fake, label)
-            dloss_fake = compute_loss(d_fake, 0)
+            # 🔧 GAN 優化：混合精度訓練
+            if use_amp:
+                with torch.cuda.amp.autocast():
+                    # real data
+                    d_real, label_real = discriminator(rgbs, label)
+                    dloss_real = compute_loss(d_real, 1)
 
-            total_d_loss = dloss_real + dloss_fake + reg
-            total_d_loss.backward()
-            d_optimizer.step()
+                # 🔧 GAN 優化：降低梯度懲罰計算頻率
+                if it % reg_every == 0:
+                    # 需要在 autocast 外計算梯度（避免精度問題）
+                    reg = config['training']['reg_param'] * compute_grad2(d_real, rgbs).mean()
+                else:
+                    reg = torch.tensor(0.0, device=device)
+
+                with torch.cuda.amp.autocast():
+                    # fake data
+                    with torch.no_grad():
+                        x_fake, _ = generator(z, label)
+                    x_fake.requires_grad_()
+
+                    d_fake, _ = discriminator(x_fake, label)
+                    dloss_fake = compute_loss(d_fake, 0)
+
+                    total_d_loss = dloss_real + dloss_fake + reg
+
+                scaler.scale(total_d_loss).backward()
+                scaler.step(d_optimizer)
+                scaler.update()
+            else:
+                # 原始訓練（無混合精度）
+                # real data
+                d_real, label_real = discriminator(rgbs, label)
+                dloss_real = compute_loss(d_real, 1)
+
+                # 🔧 GAN 優化：降低梯度懲罰計算頻率
+                if it % reg_every == 0:
+                    reg = config['training']['reg_param'] * compute_grad2(d_real, rgbs).mean()
+                else:
+                    reg = torch.tensor(0.0, device=device)
+
+                # fake data
+                with torch.no_grad():
+                    x_fake, _ = generator(z, label)
+                x_fake.requires_grad_()
+
+                d_fake, _ = discriminator(x_fake, label)
+                dloss_fake = compute_loss(d_fake, 0)
+
+                total_d_loss = dloss_real + dloss_fake + reg
+                total_d_loss.backward()
+                d_optimizer.step()
+
             d_scheduler.step()
 
             # Generators updates
@@ -264,8 +311,33 @@ def main():
             g_optimizer.zero_grad()
 
             z = zdist.sample((batch_size,))
-            x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
-            d_fake, label_fake = discriminator(x_fake, label)
+
+            # 🔧 GAN 優化：混合精度訓練
+            if use_amp:
+                with torch.cuda.amp.autocast():
+                    x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
+                    d_fake, label_fake = discriminator(x_fake, label)
+
+                    gloss = compute_loss(d_fake, 1)
+                    ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
+                    gloss_all = gloss + ccsr_consistency_loss
+
+                scaler.scale(gloss_all).backward()
+                scaler.step(g_optimizer)
+                scaler.update()
+            else:
+                # 原始訓練（無混合精度）
+                x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
+                d_fake, label_fake = discriminator(x_fake, label)
+
+                gloss = compute_loss(d_fake, 1)
+                ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
+                gloss_all = gloss + ccsr_consistency_loss
+
+                gloss_all.backward()
+                g_optimizer.step()
+
+            g_scheduler.step()
 
             # ========== NerfAcc 性能監控 ==========
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc and it % 100 == 0:
@@ -276,14 +348,6 @@ def main():
                         theoretical = extras['theoretical_samples']
                         reduction = extras.get('sample_reduction', 0)
                         print(f"[NerfAcc] Iter {it}: Samples {actual}/{theoretical} ({reduction:.1f}% reduction)")
-
-            gloss = compute_loss(d_fake, 1) 
-            ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
-            gloss_all = gloss + ccsr_consistency_loss
-
-            gloss_all.backward()
-            g_optimizer.step()
-            g_scheduler.step()
 
             current_lr_g = g_optimizer.param_groups[0]['lr']
             current_lr_d = d_optimizer.param_groups[0]['lr']
