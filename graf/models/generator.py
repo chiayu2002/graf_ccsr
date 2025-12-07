@@ -137,7 +137,7 @@ class Generator(object):
 
         # ========== 渲染 ==========
         # 評估模式使用原始方法（更穩定），訓練模式使用 NerfAcc（更快）
-        if self.use_nerfacc and not self.use_test_kwargs:
+        if self.use_nerfacc :
             # NerfAcc 渲染 - 只在訓練時使用
             rgb, disp, acc, extras = render_nerfacc(
                 self.H, self.W, self.focal, label,
@@ -169,6 +169,8 @@ class Generator(object):
                    rays_to_output(acc), extras
 
         rgb = rays_to_output(rgb)
+
+        self.last_render_extras = extras
 
         # CCSR 處理
         ccsr_output = None
@@ -240,25 +242,41 @@ class Generator(object):
             features = z_sample if z_sample is not None else None
             
             with torch.no_grad():
-                chunk_size = 65536
-                sigmas = []
-                for i in range(0, positions.shape[0], chunk_size):
-                    pos_chunk = positions[i:i+chunk_size]
-                    view_chunk = viewdirs[i:i+chunk_size]
-                    
-                    raw = network_query_fn(
-                        pos_chunk.unsqueeze(0),
-                        view_chunk,
-                        network_fn,
-                        label,
-                        features
-                    )
-                    sigma = torch.relu(raw[..., 3]).reshape(-1)
-                    sigmas.append(sigma)
-                
-                sigmas = torch.cat(sigmas, dim=0)
-            
-            return sigmas
+                chunk_size = 32768  # 減小chunk避免OOM
+                n_views = 1  # 使用4個隨機view方向
+
+                # 生成多個隨機view directions
+                random_dirs = torch.randn(n_views, 3, device=positions.device)
+                random_dirs = F.normalize(random_dirs, dim=-1)
+
+                all_sigmas = []
+
+                # 對每個view direction評估密度
+                for view_dir in random_dirs:
+                    sigmas = []
+                    for i in range(0, positions.shape[0], chunk_size):
+                        pos_chunk = positions[i:i+chunk_size]
+                        n_pos = pos_chunk.shape[0]
+
+                        # 為這批位置使用相同的view direction
+                        view_input = view_dir.unsqueeze(0)  # [1, 3]
+
+                        raw = network_query_fn(
+                            pos_chunk.unsqueeze(0),
+                            view_input,
+                            network_fn,
+                            label,
+                            z_sample
+                        )
+                        sigma = torch.relu(raw[0, :, 3])
+                        sigmas.append(sigma)
+
+                    all_sigmas.append(torch.cat(sigmas, dim=0))
+
+                # 取多個view的平均密度（更robust）
+                avg_sigmas = torch.stack(all_sigmas, dim=0).mean(dim=0)
+
+            return avg_sigmas
         
         self.estimator.update_every_n_steps(
             step=step,

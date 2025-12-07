@@ -21,7 +21,7 @@ from graf.transforms import ImgToPatch
  
 from GAN_stability.gan_training.checkpoints_mod import CheckpointIO
 
-# os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 def setup_directories(config):
     out_dir = os.path.join(config['training']['outdir'], config['expname'])
@@ -73,13 +73,21 @@ def main():
     # ========== NerfAcc 參數 ==========
     parser.add_argument('--occ_grid_update_interval', type=int, default=16, 
                         help='Occupancy grid 更新間隔（每 N 步更新一次）')
-    parser.add_argument('--use_network_for_occ', action='store_true', default=False,
-                        help='使用網路更新 occupancy grid（更精確但較慢）')
+    parser.add_argument('--use_network_for_occ', action='store_true', default=True,
+                        help='使用網路更新 occupancy grid（更精確，帶來顯著加速）')
+    parser.add_argument('--use_simple_occ', action='store_true', default=False,
+                        help='使用簡單球形估計更新（快速但不準確，不推薦）')
     args = parser.parse_args()
 
     # load config
     config = load_config(args.config)
     config['data']['fov'] = float(config['data']['fov'])
+
+    if 'nerfacc' in config and isinstance(config['nerfacc'], dict):
+        if 'occ_grid_update_interval' in config['nerfacc']:
+            args.occ_grid_update_interval = config['nerfacc']['occ_grid_update_interval']
+            print(f"[Config] Loaded occ_grid_update_interval from config: {args.occ_grid_update_interval}")
+            
     restart_every = config['training']['restart_every']
     batch_size = config['training']['batch_size']
     fid_every = config['training']['fid_every']
@@ -107,11 +115,13 @@ def main():
         print(f"[NerfAcc] Status: {nerfacc_status}")
         if generator.use_nerfacc:
             print(f"[NerfAcc] Occ grid update interval: {args.occ_grid_update_interval}")
-            print(f"[NerfAcc] Use network for occ: {args.use_network_for_occ}")
+            update_method = "Simple (sphere)" if args.use_simple_occ else "Network-based (accurate)"
+            print(f"[NerfAcc] Occ grid update method: {update_method}")
         print(f"{'='*50}\n")
         wandb.config.update({
             'nerfacc_enabled': generator.use_nerfacc,
             'occ_grid_update_interval': args.occ_grid_update_interval,
+            'use_simple_occ': args.use_simple_occ,
         })
 
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
@@ -199,13 +209,20 @@ def main():
             # ========== NerfAcc: 更新 Occupancy Grid ==========
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
                 if it % args.occ_grid_update_interval == 0:
-                    if args.use_network_for_occ:
-                        # 使用網路更新（更精確但較慢）
+                    torch.cuda.synchronize()
+                    occ_start = time.time()
+
+                    if args.use_simple_occ:
+                        # 使用簡單球形估計更新（快速但不準確）
+                        generator.update_occupancy_grid(it)
+                    else:
                         z_sample = zdist.sample((1,))
                         generator.update_occupancy_grid_with_network(it, label, z_sample)
-                    else:
-                        # 使用簡單球形估計更新（快速）
-                        generator.update_occupancy_grid(it)
+                    
+                    torch.cuda.synchronize()
+                    occ_time = (time.time() - occ_start) * 1000
+                    if it % (args.occ_grid_update_interval * 10) == 0:
+                        print(f"[NerfAcc] Occupancy grid updated in {occ_time:.1f} ms")
 
             # Discriminator updates
             d_optimizer.zero_grad()
@@ -248,6 +265,16 @@ def main():
             x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
             d_fake, label_fake = discriminator(x_fake, label)
 
+             # ========== NerfAcc 性能監控 ==========
+            if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc and it % 100 == 0:
+                if hasattr(generator, 'last_render_extras') and generator.last_render_extras:
+                    extras = generator.last_render_extras
+                    if 'n_samples' in extras and 'theoretical_samples' in extras:
+                        actual = extras['n_samples']
+                        theoretical = extras['theoretical_samples']
+                        reduction = extras.get('sample_reduction', 0)
+                        print(f"[NerfAcc] Iter {it}: Samples {actual}/{theoretical} ({reduction:.1f}% reduction)")
+
             gloss = compute_loss(d_fake, 1) 
             ccsr_consistency_loss = ccsr_nerf_loss(ccsr_output, x_fake)
             gloss_all = gloss + ccsr_consistency_loss
@@ -279,7 +306,7 @@ def main():
                 wandb.log(log_dict)
 
             # (ii) Sample if necessary
-            if ((it % config['training']['sample_every']) == 0) or ((it < 500) and (it % 100 == 0)):
+            if ((it % config['training']['sample_every']) == 0): #or ((it < 500) and (it % 100 == 0)):
                 plist = []
                 angle_positions = [(i/8, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))
