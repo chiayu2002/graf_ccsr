@@ -159,11 +159,14 @@ def main():
     use_amp = config['training'].get('use_amp', False)
     scaler = torch.cuda.amp.GradScaler() if use_amp else None
     reg_every = config['training'].get('reg_every', 1)  # 梯度懲罰頻率
+    grad_clip = config['training'].get('grad_clip', None)  # 梯度裁剪閾值
 
     if use_amp:
         print(f"\n[Optimization] Mixed Precision Training: Enabled")
     if reg_every > 1:
         print(f"[Optimization] Gradient Penalty Frequency: every {reg_every} steps (saving ~{(1-1/reg_every)*100:.0f}% computation)")
+    if grad_clip is not None:
+        print(f"[Optimization] Gradient Clipping: max_norm={grad_clip}")
     print()
 
     # get patch
@@ -272,6 +275,9 @@ def main():
                     total_d_loss = dloss_real + dloss_fake + reg
 
                 scaler.scale(total_d_loss).backward()
+                if grad_clip is not None:
+                    scaler.unscale_(d_optimizer)
+                    torch.nn.utils.clip_grad_norm_(discriminator.parameters(), grad_clip)
                 scaler.step(d_optimizer)
                 scaler.update()
             else:
@@ -296,6 +302,8 @@ def main():
 
                 total_d_loss = dloss_real + dloss_fake + reg
                 total_d_loss.backward()
+                if grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(discriminator.parameters(), grad_clip)
                 d_optimizer.step()
 
             d_scheduler.step()
@@ -323,6 +331,9 @@ def main():
                     gloss_all = gloss + ccsr_consistency_loss
 
                 scaler.scale(gloss_all).backward()
+                if grad_clip is not None:
+                    scaler.unscale_(g_optimizer)
+                    torch.nn.utils.clip_grad_norm_(generator.parameters(), grad_clip)
                 scaler.step(g_optimizer)
                 scaler.update()
             else:
@@ -335,6 +346,8 @@ def main():
                 gloss_all = gloss + ccsr_consistency_loss
 
                 gloss_all.backward()
+                if grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(generator.parameters(), grad_clip)
                 g_optimizer.step()
 
             g_scheduler.step()

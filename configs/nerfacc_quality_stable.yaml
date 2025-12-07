@@ -1,0 +1,99 @@
+expname: RS307_nerfacc_quality_stable
+data:
+  datadir: [data/RS307_n]
+  far: 4.5
+  fov: 20
+  imsize: 256
+  near: 1.5
+  orthographic: False
+  use_default_rays : False
+  radius: 2.5
+  type: RS307_0_i2
+  umax: 1.
+  umin: 0.
+  vmax: 0.5
+  vmin: 0.
+  v: 0.5, 0.4, 0.3, 0.2
+discriminator:
+  num_classes: 1
+  hflip: false
+  ndf: 64
+nerf:
+  N_samples: 64
+  decrease_noise: true
+  i_embed: 0
+  multires: 10
+  multires_views: 4
+  netdepth: 8
+  netwidth: 256
+  perturb: 1.0
+  raw_noise_std: 0.1
+  use_viewdirs: true
+  N_importance: 0
+  netdepth_fine: 8
+  netwidth_fine: 256
+ray_sampler:
+  N_samples: 4096
+  max_scale: 1.0
+  min_scale: 0.25
+  scale_anneal: 0.0025
+training:
+  backup_every: 50000
+  batch_size: 8
+  chunk: 32768
+  equalize_lr: false
+  fid_every: 5000
+  gan_type: standard
+  lr_anneal: 0.5
+  lr_anneal_every: 80000,120000,150000
+  lr_d: 0.00001            # 🔧 STABILITY: 降低 Discriminator LR (0.00002 → 0.00001)
+  lr_g: 0.0004             # 🔧 STABILITY: 降低 Generator LR (0.0008 → 0.0004)
+  model_average_beta: 0.999
+  model_average_reinit: false
+  model_file: model.pt
+  netchunk: 65536
+  nworkers: 0
+  optimizer: rmsprop
+  outdir: ./results
+  print_every: 10
+  reg_param: 20.0
+  restart_every: -1
+  sample_every: 500
+  save_best: fid
+  save_every: 1000
+  take_model_average: true
+  grad_clip: 1.0           # 🔧 NEW: 添加梯度裁剪，防止梯度爆炸
+z_dist:
+  dim: 256
+  type: gauss
+ccsr:
+    enabled: False
+    num_views: 8,
+    scale_factor: 4,
+    alpha_init: 1.0,
+    alpha_decay: 0.0001
+wandb:
+  project: graf251105
+  entity: vicky20020808
+  name: RS307_nerfacc_quality_stable
+nerfacc:
+  use_nerfacc: true
+  resolution: 32
+  render_step_size: 0.08
+  occ_grid_update_interval: 128
+
+# ⚡ 穩定訓練配置
+#
+# 問題：從 aggressive 切換到 quality 後，樣本點增加 4×，導致梯度變大
+# 解決：降低學習率 + 添加梯度裁剪
+#
+# 關鍵修改：
+# 1. lr_g: 0.0008 → 0.0004 (Generator 學習率降低 50%)
+# 2. lr_d: 0.00002 → 0.00001 (Discriminator 學習率降低 50%)
+# 3. grad_clip: 1.0 (添加梯度裁剪)
+#
+# 預期效果：
+# - Generator loss 穩定下降（不再上升）
+# - 訓練更穩定
+# - 圖像質量保持（無黑線，清晰）
+# - 速度：~48-50 it/min
