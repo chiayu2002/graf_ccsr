@@ -318,11 +318,17 @@ def main():
                 ptest = torch.stack(plist)
 
                 rgb, depth, acc = evaluator.create_samples(ztest.to(device), label_test, ptest)
-        
+
+                # Create seamless panoramas by concatenating images horizontally without padding
+                # rgb/depth/acc shape: (N, C, H, W) -> concatenate along width to create (C, H, N*W)
+                rgb_pano = torch.cat([rgb[i] for i in range(rgb.shape[0])], dim=2)  # (3, H, 8*W)
+                depth_pano = torch.cat([depth[i] for i in range(depth.shape[0])], dim=2)  # (3, H, 8*W)
+                acc_pano = torch.cat([acc[i] for i in range(acc.shape[0])], dim=2)  # (1, H, 8*W)
+
                 wandb.log({
-                    "sample/rgb": [wandb.Image(rgb, caption=f"RGB at iter {it}")],
-                    "sample/depth": [wandb.Image(depth, caption=f"Depth at iter {it}")],
-                    "sample/acc": [wandb.Image(acc, caption=f"Acc at iter {it}")],
+                    "sample/rgb": [wandb.Image(rgb_pano, caption=f"RGB at iter {it}")],
+                    "sample/depth": [wandb.Image(depth_pano, caption=f"Depth at iter {it}")],
+                    "sample/acc": [wandb.Image(acc_pano, caption=f"Acc at iter {it}")],
                     "epoch_idx": epoch_idx,
                     "iteration": it
                 })
