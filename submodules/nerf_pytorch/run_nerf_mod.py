@@ -258,9 +258,9 @@ def render_nerfacc(H, W, focal, label, rays=None,
             far_plane=far,
             render_step_size=render_step_size,
             early_stop_eps=1e-4,
-            alpha_thre=0.01,  # 🔧 QUALITY: 保守閾值，保留更多細節
-                              # aggressive 配置可用 0.03-0.05（更快但質量下降）
-                              # quality 配置用 0.01-0.02（質量優先）
+            alpha_thre=0.005,  # 🔧 ULTRA STABLE: 最保守閾值，確保無黑線
+                               # quality 配置可用 0.01-0.02
+                               # aggressive 配置可用 0.03-0.05（更快但質量下降）
             stratified=True,
         )
     # DEBUG_INJECTION
