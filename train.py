@@ -301,7 +301,7 @@ def main():
                 wandb.log(log_dict)
 
             # (ii) Sample if necessary
-            if ((it % config['training']['sample_every']) == 0) or ((it < 500) and (it % 100 == 0)):
+            if ((it % config['training']['sample_every']) == 0) or ((it < 500) and (it % 500 == 0)):  # 🔧 减少早期采样频率（100 → 500）
                 plist = []
                 angle_positions = [(i/8, 0.5) for i in range(8)] 
                 ztest = zdist.sample((batch_size,))

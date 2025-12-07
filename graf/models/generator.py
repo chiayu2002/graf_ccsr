@@ -136,9 +136,9 @@ class Generator(object):
         render_kwargs['features'] = z
 
         # ========== 渲染 ==========
-        # 評估模式使用原始方法（更穩定），訓練模式使用 NerfAcc（更快）
-        if self.use_nerfacc and not self.use_test_kwargs:
-            # NerfAcc 渲染 - 只在訓練時使用
+        # 🔧 評估模式也使用 NerfAcc（加速樣本生成）
+        if self.use_nerfacc:
+            # NerfAcc 渲染 - 訓練和評估時都使用
             rgb, disp, acc, extras = render_nerfacc(
                 self.H, self.W, self.focal, label,
                 rays=rays,
