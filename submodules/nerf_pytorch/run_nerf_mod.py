@@ -74,7 +74,13 @@ def render(H, W, focal, label, chunk=1024*32, rays=None, c2w=None, ndc=True,
            near=0., far=1.,
            use_viewdirs=False, c2w_staticcam=None,
            **kwargs):
-    """原本的渲染函數（不使用 NerfAcc）"""
+"""原本的渲染函數（不使用 NerfAcc）"""# DEBUG_INJECTION
+    global _render_call_count
+    if '_render_call_count' not in globals():
+        _render_call_count = 0
+    _render_call_count += 1
+    if _render_call_count <= 5:
+        print(f"[DEBUG] render (original) called (#{_render_call_count})")
     
     if c2w is not None:
         rays_o, rays_d = get_rays(H, W, focal, c2w)
@@ -132,6 +138,13 @@ def render_nerfacc(H, W, focal, label, rays=None,
     使用 NerfAcc 加速的渲染函數
     ⚡ 優化版本：只調用一次 estimator.sampling()（而不是 batch_size 次）
     """
+# DEBUG_INJECTION
+    global _nerfacc_call_count
+    if '_nerfacc_call_count' not in globals():
+        _nerfacc_call_count = 0
+    _nerfacc_call_count += 1
+    if _nerfacc_call_count <= 5:
+        print(f"[DEBUG] render_nerfacc called (#{_nerfacc_call_count}), bs={features.shape[0] if features is not None else 1}, N_rays={rays[0].shape[0] if rays is not None else 0}")
     if estimator is None:
         raise ValueError("NerfAcc render requires an OccGridEstimator")
 
@@ -188,6 +201,18 @@ def render_nerfacc(H, W, focal, label, rays=None,
         return sigmas
 
     # ⭐ 只調用一次 estimator.sampling()（之前是調用 bs=8 次！）
+    # DEBUG_INJECTION
+    global _sampling_call_count
+    if '_sampling_call_count' not in globals():
+        _sampling_call_count = 0
+    _sampling_call_count += 1
+
+    import time
+    if _sampling_call_count <= 5:
+        print(f"[DEBUG] estimator.sampling called (#{_sampling_call_count}), rays_o.shape={rays_o.shape}")
+    torch.cuda.synchronize()
+    _sampling_start = time.time()
+    # END DEBUG_INJECTION
     with torch.no_grad():
         ray_indices_all, t_starts_all, t_ends_all = estimator.sampling(
             rays_o=rays_o,  # 所有 rays
@@ -200,6 +225,12 @@ def render_nerfacc(H, W, focal, label, rays=None,
             alpha_thre=0.001,
             stratified=True,
         )
+    # DEBUG_INJECTION
+    torch.cuda.synchronize()
+    _sampling_time = (time.time() - _sampling_start) * 1000
+    if _sampling_call_count <= 5:
+        print(f"[DEBUG] estimator.sampling took {_sampling_time:.2f}ms, returned {len(t_starts_all):,} samples")
+    # END DEBUG_INJECTION
 
     # 準備輸出
     all_rgb = []
