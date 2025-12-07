@@ -222,7 +222,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
             far_plane=far,
             render_step_size=render_step_size,
             early_stop_eps=1e-4,
-            alpha_thre=0.001,
+            alpha_thre=0.01,  # 🔧 提高閾值（0.001 → 0.01）減少採樣點，加速 sampling
             stratified=True,
         )
     # DEBUG_INJECTION

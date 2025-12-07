@@ -77,9 +77,9 @@ wandb:
   name: RS307_nerfacc_optimized
 nerfacc:
   use_nerfacc: true           # ✅ 啟用 NerfAcc
-  resolution: 64              # 🔧 降低解析度（從 128 降到 64）- 減少 8× 的計算量
-                              # 64³ = 262,144 個點（vs 128³ = 2,097,152）
-  render_step_size: null      # 自動計算
+  resolution: 32              # 🔧 再次降低解析度（64 → 32）- 減少 8× 查詢開銷
+                              # 32³ = 32,768 個點（vs 64³ = 262,144）
+  render_step_size: 0.08      # 🔧 增大步長（減少初始採樣密度，加速 sampling）
 
 # ⚡ 優化說明：
 # 1. Grid resolution: 128 → 64 (減少 8× 計算量)
