@@ -80,6 +80,7 @@ nerfacc:
   resolution: 16              # 🔧 AGGRESSIVE: 24 → 16 (更快的 grid 查詢)
                               # 16³ = 4,096 個點（vs 24³ = 13,824）
   render_step_size: 0.2       # 🔧 AGGRESSIVE: 0.12 → 0.2 (更大步長 = 更少初始採樣)
+  occ_grid_update_interval: 128  # 🔧 明確設定更新間隔（每 128 步更新，不是 16）
 
 # ⚡ AGGRESSIVE 優化配置
 # 目標：犧牲一些質量來最大化速度

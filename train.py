@@ -82,6 +82,13 @@ def main():
     # load config
     config = load_config(args.config)
     config['data']['fov'] = float(config['data']['fov'])
+
+    # 🔧 從配置文件讀取 NerfAcc 參數（如果存在）
+    if 'nerfacc' in config and isinstance(config['nerfacc'], dict):
+        if 'occ_grid_update_interval' in config['nerfacc']:
+            args.occ_grid_update_interval = config['nerfacc']['occ_grid_update_interval']
+            print(f"[Config] Loaded occ_grid_update_interval from config: {args.occ_grid_update_interval}")
+
     restart_every = config['training']['restart_every']
     batch_size = config['training']['batch_size']
     fid_every = config['training']['fid_every']
