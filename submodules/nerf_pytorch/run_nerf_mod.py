@@ -174,30 +174,66 @@ def render_nerfacc(H, W, focal, label, rays=None,
     # ========== ⚡ 關鍵優化：只調用一次 estimator.sampling() ==========
     # 定義統一的 sigma_fn（使用第一個 batch 的 feature 作為代表）
     def sigma_fn_unified(t_starts, t_ends, ray_indices):
-        """統一的密度查詢函數（用於所有 rays 的採樣）"""
+        """統一的密度查詢函數（用於所有 rays 的採樣）
+
+        🔧 OOM FIX: 分批處理網絡查詢，避免一次處理太多樣本點
+        """
         t_origins = rays_o[ray_indices]
         t_dirs = rays_d[ray_indices]
         positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
 
         N = positions.shape[0]
-        pos_input = positions.unsqueeze(0)  # [1, N, 3]
 
-        # 使用平均 viewdir
-        if viewdirs is not None:
-            vdirs = viewdirs[ray_indices]
-            vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
+        # 🔧 分批處理：每批最多處理 65536 個點（避免 OOM）
+        chunk_size = 65536
+        if N <= chunk_size:
+            # 小批量：直接處理
+            pos_input = positions.unsqueeze(0)  # [1, N, 3]
+
+            # 使用平均 viewdir
+            if viewdirs is not None:
+                vdirs = viewdirs[ray_indices]
+                vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
+            else:
+                vdir = torch.zeros(1, 3, device=device)
+                vdir[0, 2] = -1.0
+
+            # 使用第一個 batch 的 feature
+            feat = features[0:1] if features is not None else None
+            lbl = label[0:1]
+
+            with torch.no_grad():
+                raw = network_query_fn(pos_input, vdir, network_fn, lbl, feat)
+
+            sigmas = torch.relu(raw[0, :, 3])  # [N]
         else:
-            vdir = torch.zeros(1, 3, device=device)
-            vdir[0, 2] = -1.0
+            # 大批量：分塊處理（避免 OOM）
+            sigmas_chunks = []
 
-        # 使用第一個 batch 的 feature（occupancy 主要依賴幾何，對 feature 不敏感）
-        feat = features[0:1] if features is not None else None
-        lbl = label[0:1]
+            # 計算 viewdir（只計算一次）
+            if viewdirs is not None:
+                vdirs = viewdirs[ray_indices]
+                vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
+            else:
+                vdir = torch.zeros(1, 3, device=device)
+                vdir[0, 2] = -1.0
 
-        with torch.no_grad():
-            raw = network_query_fn(pos_input, vdir, network_fn, lbl, feat)
+            feat = features[0:1] if features is not None else None
+            lbl = label[0:1]
 
-        sigmas = torch.relu(raw[0, :, 3])  # [N]
+            # 分塊處理
+            for i in range(0, N, chunk_size):
+                end_idx = min(i + chunk_size, N)
+                pos_chunk = positions[i:end_idx].unsqueeze(0)  # [1, chunk, 3]
+
+                with torch.no_grad():
+                    raw_chunk = network_query_fn(pos_chunk, vdir, network_fn, lbl, feat)
+
+                sigmas_chunk = torch.relu(raw_chunk[0, :, 3])  # [chunk]
+                sigmas_chunks.append(sigmas_chunk)
+
+            sigmas = torch.cat(sigmas_chunks, dim=0)  # [N]
+
         return sigmas
 
     # ⭐ 只調用一次 estimator.sampling()（之前是調用 bs=8 次！）
