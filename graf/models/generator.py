@@ -137,7 +137,8 @@ class Generator(object):
 
         # ========== 渲染 ==========
         # 評估模式使用原始方法（更穩定），訓練模式使用 NerfAcc（更快）
-        if self.use_nerfacc :
+        # 在 eval 模式下禁用 NerfAcc，避免 occupancy grid 導致黑色區域
+        if self.use_nerfacc and self.training:
             # NerfAcc 渲染 - 只在訓練時使用
             rgb, disp, acc, extras = render_nerfacc(
                 self.H, self.W, self.focal, label,
