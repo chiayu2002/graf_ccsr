@@ -258,8 +258,9 @@ def render_nerfacc(H, W, focal, label, rays=None,
             far_plane=far,
             render_step_size=render_step_size,
             early_stop_eps=1e-4,
-            alpha_thre=0.05,  # 🔧 AGGRESSIVE: 提高閾值（0.01 → 0.03 → 0.05）大幅減少採樣點
-                              # 如果質量下降太多，可以降低到 0.03 或 0.02
+            alpha_thre=0.01,  # 🔧 QUALITY: 保守閾值，保留更多細節
+                              # aggressive 配置可用 0.03-0.05（更快但質量下降）
+                              # quality 配置用 0.01-0.02（質量優先）
             stratified=True,
         )
     # DEBUG_INJECTION

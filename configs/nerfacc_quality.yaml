@@ -1,0 +1,96 @@
+expname: RS307_nerfacc_quality
+data:
+  datadir: [data/RS307_n]
+  far: 4.5
+  fov: 20
+  imsize: 256
+  near: 1.5
+  orthographic: False
+  use_default_rays : False
+  radius: 2.5
+  type: RS307_0_i2
+  umax: 1.
+  umin: 0.
+  vmax: 0.5
+  vmin: 0.
+  v: 0.5, 0.4, 0.3, 0.2
+discriminator:
+  num_classes: 1
+  hflip: false
+  ndf: 64
+nerf:
+  N_samples: 64
+  decrease_noise: true
+  i_embed: 0
+  multires: 10
+  multires_views: 4
+  netdepth: 8
+  netwidth: 256
+  perturb: 1.0
+  raw_noise_std: 0.1
+  use_viewdirs: true
+  N_importance: 0
+  netdepth_fine: 8
+  netwidth_fine: 256
+ray_sampler:
+  N_samples: 4096
+  max_scale: 1.0
+  min_scale: 0.25
+  scale_anneal: 0.0025
+training:
+  backup_every: 50000
+  batch_size: 8
+  chunk: 32768
+  equalize_lr: false
+  fid_every: 5000
+  gan_type: standard
+  lr_anneal: 0.5
+  lr_anneal_every: 80000,120000,150000
+  lr_d: 0.00002
+  lr_g: 0.0008
+  model_average_beta: 0.999
+  model_average_reinit: false
+  model_file: model.pt
+  netchunk: 65536
+  nworkers: 0
+  optimizer: rmsprop
+  outdir: ./results
+  print_every: 10
+  reg_param: 20.0
+  restart_every: -1
+  sample_every: 500
+  save_best: fid
+  save_every: 1000
+  take_model_average: true
+z_dist:
+  dim: 256
+  type: gauss
+ccsr:
+    enabled: False
+    num_views: 8,
+    scale_factor: 4,
+    alpha_init: 1.0,
+    alpha_decay: 0.0001
+wandb:
+  project: graf251105
+  entity: vicky20020808
+  name: RS307_nerfacc_quality
+nerfacc:
+  use_nerfacc: true
+  resolution: 32              # 🔧 QUALITY: 提高到 32（保證細節）
+  render_step_size: 0.08      # 🔧 QUALITY: 降低到 0.08（更密集採樣）
+  occ_grid_update_interval: 128
+
+# ⚡ 質量優先配置
+# 目標：保證圖像質量，同時獲得適度加速
+#
+# 修復黑線和模糊問題：
+# - resolution: 16 → 32 (更精細的 grid)
+# - render_step_size: 0.2 → 0.08 (更密集的初始採樣)
+# - alpha_thre: 0.05 → 0.01 (在代碼中，更保守的裁剪)
+#
+# 預期結果：
+# - 樣本減少: 87% → 40-50% (保留更多細節)
+# - 圖像質量: 清晰，無黑線
+# - 速度: 仍比基準快 5-10%
+# - 樣本生成: 仍然很快（~2-3s）
