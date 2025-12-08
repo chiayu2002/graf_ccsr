@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 
 from .run_nerf_helpers_mod import *
 
-# ========== NerfAcc imports ==========
 import nerfacc
 from nerfacc import OccGridEstimator, render_weight_from_density, accumulate_along_rays
 
@@ -74,14 +73,8 @@ def render(H, W, focal, label, chunk=1024*32, rays=None, c2w=None, ndc=True,
            near=0., far=1.,
            use_viewdirs=False, c2w_staticcam=None,
            **kwargs):
-    """原本的渲染函數（不使用 NerfAcc）"""# DEBUG_INJECTION
-    global _render_call_count
-    if '_render_call_count' not in globals():
-        _render_call_count = 0
-    _render_call_count += 1
-    if _render_call_count <= 5:
-        print(f"[DEBUG] render (original) called (#{_render_call_count})")
-    
+    """Original rendering function (without NerfAcc)"""
+
     if c2w is not None:
         rays_o, rays_d = get_rays(H, W, focal, c2w)
     else:
@@ -121,8 +114,6 @@ def render(H, W, focal, label, chunk=1024*32, rays=None, c2w=None, ndc=True,
     return ret_list + [ret_dict]
 
 
-# ========== NerfAcc 渲染函數 ==========
-
 def render_nerfacc(H, W, focal, label, rays=None,
                    near=0., far=1.,
                    use_viewdirs=True,
@@ -134,30 +125,22 @@ def render_nerfacc(H, W, focal, label, rays=None,
                    network_fine=None,
                    **kwargs):
     """
-    使用 NerfAcc 加速的渲染函數
-    ⚡ 優化版本：只調用一次 estimator.sampling()（而不是 batch_size 次）
+    Accelerated rendering function using NerfAcc
+    Optimized: only calls estimator.sampling() once (not batch_size times)
     """
-    # DEBUG_INJECTION
-    global _nerfacc_call_count
-    if '_nerfacc_call_count' not in globals():
-        _nerfacc_call_count = 0
-    _nerfacc_call_count += 1
-    if _nerfacc_call_count <= 5:
-        print(f"[DEBUG] render_nerfacc called (#{_nerfacc_call_count}), bs={features.shape[0] if features is not None else 1}, N_rays={rays[0].shape[0] if rays is not None else 0}")
-
     if estimator is None:
         raise ValueError("NerfAcc render requires an OccGridEstimator")
-    
-        # 解析 rays
+
+    # Parse rays
     rays_o, rays_d = rays
-    sh = rays_d.shape  # 保存原始形状用于最后 reshape
+    sh = rays_d.shape
     rays_o = torch.reshape(rays_o, [-1, 3]).float()
     rays_d = torch.reshape(rays_d, [-1, 3]).float()
 
     N_rays_total = rays_o.shape[0]
     device = rays_o.device
 
-    # 計算 batch 資訊
+    # Calculate batch information
     if features is not None:
         bs = features.shape[0]
         n_rays_per_batch = N_rays_total // bs
@@ -165,28 +148,26 @@ def render_nerfacc(H, W, focal, label, rays=None,
         bs = 1
         n_rays_per_batch = N_rays_total
 
-    # 處理 viewdirs（所有 rays）
+    # Process viewdirs (all rays)
     if use_viewdirs:
         viewdirs = rays_d / (torch.norm(rays_d, dim=-1, keepdim=True) + 1e-8)
     else:
         viewdirs = None
 
-    # ========== ⚡ 關鍵優化：只調用一次 estimator.sampling() ==========
-    # 定義統一的 sigma_fn（使用第一個 batch 的 feature 作為代表）
+    # Define unified sigma_fn (use first batch's feature as representative)
     def sigma_fn_unified(t_starts, t_ends, ray_indices):
-        """統一的密度查詢函數（用於所有 rays 的採樣）"""
+        """Unified density query function for all rays"""
         t_origins = rays_o[ray_indices]
         t_dirs = rays_d[ray_indices]
         positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
 
         N = positions.shape[0]
-        # 🔧 分批處理：每批最多處理 65536 個點（避免 OOM）
         chunk_size = 65536
         if N <= chunk_size:
-            # 小批量：直接處理
-            pos_input = positions.unsqueeze(0)  # [1, N, 3]
+            # Small batch: process directly
+            pos_input = positions.unsqueeze(0)
 
-            # 使用平均 viewdir
+            # Use average viewdir
             if viewdirs is not None:
                 vdirs = viewdirs[ray_indices]
                 vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
@@ -194,19 +175,19 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 vdir = torch.zeros(1, 3, device=device)
                 vdir[0, 2] = -1.0
 
-            # 使用第一個 batch 的 feature
+            # Use first batch's feature
             feat = features[0:1] if features is not None else None
             lbl = label[0:1]
 
             with torch.no_grad():
                 raw = network_query_fn(pos_input, vdir, network_fn, lbl, feat)
 
-            sigmas = torch.relu(raw[0, :, 3])  # [N]
+            sigmas = torch.relu(raw[0, :, 3])
         else:
-            # 大批量：分塊處理（避免 OOM）
+            # Large batch: process in chunks (avoid OOM)
             sigmas_chunks = []
 
-            # 計算 viewdir（只計算一次）
+            # Calculate viewdir (only once)
             if viewdirs is not None:
                 vdirs = viewdirs[ray_indices]
                 vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
@@ -217,37 +198,24 @@ def render_nerfacc(H, W, focal, label, rays=None,
             feat = features[0:1] if features is not None else None
             lbl = label[0:1]
 
-            # 分塊處理
+            # Process in chunks
             for i in range(0, N, chunk_size):
                 end_idx = min(i + chunk_size, N)
-                pos_chunk = positions[i:end_idx].unsqueeze(0)  # [1, chunk, 3]
+                pos_chunk = positions[i:end_idx].unsqueeze(0)
 
                 with torch.no_grad():
                     raw_chunk = network_query_fn(pos_chunk, vdir, network_fn, lbl, feat)
-                sigmas_chunk = torch.relu(raw_chunk[0, :, 3])  # [chunk]
+                sigmas_chunk = torch.relu(raw_chunk[0, :, 3])
                 sigmas_chunks.append(sigmas_chunk)
 
-            sigmas = torch.cat(sigmas_chunks, dim=0)  # [N]
+            sigmas = torch.cat(sigmas_chunks, dim=0)
 
         return sigmas
 
-    # ⭐ 只調用一次 estimator.sampling()（之前是調用 bs=8 次！）
-     # DEBUG_INJECTION
-    global _sampling_call_count
-    if '_sampling_call_count' not in globals():
-        _sampling_call_count = 0
-    _sampling_call_count += 1
-
-    import time
-    if _sampling_call_count <= 5:
-        print(f"[DEBUG] estimator.sampling called (#{_sampling_call_count}), rays_o.shape={rays_o.shape}")
-    torch.cuda.synchronize()
-    _sampling_start = time.time()
-    # END DEBUG_INJECTION
-
+    # Call estimator.sampling() only once
     with torch.no_grad():
         ray_indices_all, t_starts_all, t_ends_all = estimator.sampling(
-            rays_o=rays_o,  # 所有 rays
+            rays_o=rays_o,
             rays_d=rays_d,
             sigma_fn=sigma_fn_unified,
             near_plane=near,
@@ -258,61 +226,54 @@ def render_nerfacc(H, W, focal, label, rays=None,
             stratified=True,
         )
 
-    # DEBUG_INJECTION
-    torch.cuda.synchronize()
-    _sampling_time = (time.time() - _sampling_start) * 1000
-    if _sampling_call_count <= 5:
-        print(f"[DEBUG] estimator.sampling took {_sampling_time:.2f}ms, returned {len(t_starts_all):,} samples")
-    # END DEBUG_INJECTION
-
-    # 準備輸出
+    # Prepare outputs
     all_rgb = []
     all_disp = []
     all_acc = []
     total_samples = 0
 
-    # ========== 按 batch 處理渲染（但不重新採樣）==========
+    # Process rendering per batch (but don't resample)
     for b in range(bs):
-        # 提取這個 batch 的 rays 範圍
+        # Extract rays range for this batch
         batch_start = b * n_rays_per_batch
         batch_end = (b + 1) * n_rays_per_batch
 
-        # 篩選屬於這個 batch 的採樣點
+        # Filter samples belonging to this batch
         mask = (ray_indices_all >= batch_start) & (ray_indices_all < batch_end)
-        ray_indices = ray_indices_all[mask] - batch_start  # 轉換為 batch 內索引
+        ray_indices = ray_indices_all[mask] - batch_start
         t_starts = t_starts_all[mask]
         t_ends = t_ends_all[mask]
 
-        # 這個 batch 的 rays
+        # Rays for this batch
         batch_rays_o = rays_o[batch_start:batch_end]
         batch_rays_d = rays_d[batch_start:batch_end]
         N_rays = n_rays_per_batch
 
-        # 這個 batch 的 feature 和 label
+        # Feature and label for this batch
         if features is not None:
             batch_feature = features[b:b+1]
         else:
             batch_feature = None
         batch_label = label[b:b+1]
 
-        # 這個 batch 的 viewdirs
+        # Viewdirs for this batch
         if viewdirs is not None:
             batch_viewdirs = viewdirs[batch_start:batch_end]
         else:
             batch_viewdirs = None
 
-        # 初始化輸出
+        # Initialize outputs
         rgb_map = torch.zeros(N_rays, 3, device=device)
         acc_map = torch.zeros(N_rays, device=device)
         depth_map = torch.zeros(N_rays, device=device)
 
         if len(ray_indices) > 0:
-            # 計算採樣點位置
+            # Calculate sample positions
             t_origins = batch_rays_o[ray_indices]
             t_dirs = batch_rays_d[ray_indices]
             positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
 
-            # 準備 viewdirs
+            # Prepare viewdirs
             if batch_viewdirs is not None:
                 vdirs = batch_viewdirs[ray_indices]
                 vdir = vdirs.mean(dim=0, keepdim=True)  # [1, 3]
@@ -320,9 +281,9 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 vdir = torch.zeros(1, 3, device=device)
                 vdir[0, 2] = -1.0
 
-            # 查詢 RGB 和 sigma（使用這個 batch 的真實 feature）
+            # Query RGB and sigma (use this batch's real feature)
             N = positions.shape[0]
-            pos_input = positions.unsqueeze(0)  # [1, N, 3]
+            pos_input = positions.unsqueeze(0)
 
             raw = network_query_fn(
                 pos_input,
@@ -330,12 +291,12 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 network_fn,
                 batch_label,
                 batch_feature
-            )  # [1, N, 4]
+            )
 
-            rgbs = torch.sigmoid(raw[0, :, :3])  # [N, 3]
-            sigmas = torch.relu(raw[0, :, 3])  # [N]
+            rgbs = torch.sigmoid(raw[0, :, :3])
+            sigmas = torch.relu(raw[0, :, 3])
 
-            # 計算權重
+            # Calculate weights
             weights, trans, alphas = render_weight_from_density(
                 t_starts=t_starts,
                 t_ends=t_ends,
@@ -344,7 +305,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 n_rays=N_rays,
             )
 
-            # 累積顏色
+            # Accumulate color
             rgb_map = accumulate_along_rays(
                 weights=weights,
                 ray_indices=ray_indices,
@@ -352,7 +313,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
                 n_rays=N_rays,
             )
 
-            # 累積不透明度
+            # Accumulate opacity
             acc_map = accumulate_along_rays(
                 weights=weights,
                 ray_indices=ray_indices,
@@ -362,7 +323,7 @@ def render_nerfacc(H, W, focal, label, rays=None,
             if acc_map.dim() > 1:
                 acc_map = acc_map.reshape(N_rays)
 
-            # 累積深度
+            # Accumulate depth
             depth_map = accumulate_along_rays(
                 weights=weights,
                 ray_indices=ray_indices,
@@ -374,24 +335,24 @@ def render_nerfacc(H, W, focal, label, rays=None,
 
             total_samples += len(t_starts)
 
-        # 計算 disparity
+        # Calculate disparity
         disp_map = 1.0 / torch.clamp(depth_map / (acc_map + 1e-10), min=1e-10)
 
         all_rgb.append(rgb_map)
         all_disp.append(disp_map)
         all_acc.append(acc_map)
-    
-    # 合併所有 batch 的結果
-    rgb_final = torch.cat(all_rgb, dim=0)  # [N_rays_total, 3]
-    disp_final = torch.cat(all_disp, dim=0)  # [N_rays_total]
-    acc_final = torch.cat(all_acc, dim=0)  # [N_rays_total]
 
-    # Reshape 回原始形状
+    # Merge results from all batches
+    rgb_final = torch.cat(all_rgb, dim=0)
+    disp_final = torch.cat(all_disp, dim=0)
+    acc_final = torch.cat(all_acc, dim=0)
+
+    # Reshape to original shape
     rgb_final = rgb_final.view(list(sh[:-1]) + [3])
     disp_final = disp_final.view(list(sh[:-1]))
     acc_final = acc_final.view(list(sh[:-1]))
 
-    # 計算統計信息
+    # Calculate statistics
     theoretical_samples = N_rays_total * int((far - near) / render_step_size)
     sample_reduction_pct = (1 - total_samples / theoretical_samples) * 100 if theoretical_samples > 0 else 0
 

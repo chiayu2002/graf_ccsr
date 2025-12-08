@@ -18,9 +18,9 @@ import pickle
 
 class Generator(object):
     def __init__(self, H, W, focal, radius, ray_sampler, render_kwargs_train, render_kwargs_test, parameters, named_parameters,
-                 range_u=(0,1), range_v=(0.01,0.49), v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False, 
+                 range_u=(0,1), range_v=(0.01,0.49), v=0, chunk=None, device='cuda', orthographic=False, use_default_rays=False,
                  use_ccsr=True, num_views=8,
-                 # ========== NerfAcc 參數 ==========
+                 # NerfAcc parameters
                  use_nerfacc=True,
                  near=1.5,
                  far=4.5,
@@ -38,8 +38,8 @@ class Generator(object):
         self.v = v
         self.use_default_rays = use_default_rays
         self.use_ccsr = use_ccsr
-        
-        # ========== NerfAcc 設定 ==========
+
+        # NerfAcc settings
         self.use_nerfacc = use_nerfacc
         self.near = near
         self.far = far
@@ -59,9 +59,8 @@ class Generator(object):
             if module is not None:
                 self.module_dict[name] = module
 
-        # ========== 初始化 NerfAcc OccGridEstimator ==========
+        # Initialize NerfAcc OccGridEstimator
         if self.use_nerfacc:
-            # 根據場景設定 AABB（場景邊界框）
             aabb_scale = radius * 1.5
             scene_aabb = torch.tensor([
                 -aabb_scale, -aabb_scale, -aabb_scale,
@@ -73,8 +72,7 @@ class Generator(object):
                 resolution=nerfacc_resolution,
                 levels=1
             ).to(device)
-            
-            # 渲染步長
+
             if render_step_size is None:
                 N_samples = render_kwargs_train.get('N_samples', 64)
                 self.render_step_size = (far - near) / N_samples
@@ -90,7 +88,7 @@ class Generator(object):
             self.estimator = None
             self.render_step_size = None
 
-        # 添加 CCSR 模組
+        # Add CCSR module
         if self.use_ccsr:
             lr_height, lr_width = H // 4, W // 4
             self.ccsr = CCSR(num_views=num_views, lr_height=lr_height, lr_width=lr_width, scale_factor=4).to(device)
@@ -106,8 +104,8 @@ class Generator(object):
         self.named_parameters = lambda: self._named_parameters
 
         self.use_test_kwargs = False
-        
-        # 設定原始 render 函數
+
+        # Set original render function
         self.render = partial(render, H=self.H, W=self.W, focal=self.focal, chunk=self.chunk)
 
     def __call__(self, z, label, rays=None, return_ccsr_output=False):
@@ -132,29 +130,26 @@ class Generator(object):
                 rays = torch.cat(all_rays, dim=1)
 
         render_kwargs = self.render_kwargs_test if self.use_test_kwargs else self.render_kwargs_train
-        render_kwargs = dict(render_kwargs)  # 複製一份
+        render_kwargs = dict(render_kwargs)  # Copy
         render_kwargs['features'] = z
 
-        # ========== 渲染 ==========
-        # 評估模式使用原始方法（更穩定），訓練模式使用 NerfAcc（更快）
-        if self.use_nerfacc :
-            # NerfAcc 渲染 - 只在訓練時使用
+        # Rendering: use NerfAcc for training (faster)
+        if self.use_nerfacc:
             rgb, disp, acc, extras = render_nerfacc(
                 self.H, self.W, self.focal, label,
                 rays=rays,
-                near=self.near, 
+                near=self.near,
                 far=self.far,
                 use_viewdirs=render_kwargs.get('use_viewdirs', True),
                 estimator=self.estimator,
                 render_step_size=self.render_step_size,
-                # 只傳遞 render_nerfacc 需要的參數
                 network_fn=render_kwargs['network_fn'],
                 network_query_fn=render_kwargs['network_query_fn'],
                 features=render_kwargs.get('features'),
                 network_fine=render_kwargs.get('network_fine'),
             )
         else:
-            # 原本的渲染 - 評估時使用
+            # Original rendering
             rgb, disp, acc, extras = render(
                 self.H, self.W, self.focal, label,
                 chunk=self.chunk, rays=rays,
@@ -172,7 +167,7 @@ class Generator(object):
 
         self.last_render_extras = extras
 
-        # CCSR 處理
+        # CCSR processing
         ccsr_output = None
         if self.use_ccsr and return_ccsr_output:
             total_elements = rgb.numel()

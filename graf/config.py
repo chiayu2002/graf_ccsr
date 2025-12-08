@@ -88,13 +88,12 @@ def build_models(config, disc=True):
 
     H, W, f, r = config['data']['hwfr']
 
-    # ========== NerfAcc 參數 ==========
+    # NerfAcc parameters
     nerfacc_config = config.get('nerfacc', {})
     use_nerfacc = nerfacc_config.get('use_nerfacc', True)
     nerfacc_resolution = nerfacc_config.get('resolution', 128)
     render_step_size = nerfacc_config.get('render_step_size', None)
-    
-    # 從 data 獲取 near/far
+
     near = config['data']['near']
     far = config['data']['far']
 
@@ -112,7 +111,7 @@ def build_models(config, disc=True):
                           use_default_rays=config['data']['use_default_rays'],
                           use_ccsr=True,
                           num_views=8,
-                          # ========== NerfAcc 參數 ==========
+                          # NerfAcc parameters
                           use_nerfacc=use_nerfacc,
                           near=near,
                           far=far,

@@ -70,58 +70,51 @@ def main():
     set_random_seed(0)
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='configs/default.yaml')
-    # ========== NerfAcc 參數 ==========
-    parser.add_argument('--occ_grid_update_interval', type=int, default=16, 
-                        help='Occupancy grid 更新間隔（每 N 步更新一次）')
-    parser.add_argument('--use_network_for_occ', action='store_true', default=True,
-                        help='使用網路更新 occupancy grid（更精確，帶來顯著加速）')
-    parser.add_argument('--use_simple_occ', action='store_true', default=False,
-                        help='使用簡單球形估計更新（快速但不準確，不推薦）')
     args = parser.parse_args()
 
     # load config
     config = load_config(args.config)
     config['data']['fov'] = float(config['data']['fov'])
 
-    if 'nerfacc' in config and isinstance(config['nerfacc'], dict):
-        if 'occ_grid_update_interval' in config['nerfacc']:
-            args.occ_grid_update_interval = config['nerfacc']['occ_grid_update_interval']
-            print(f"[Config] Loaded occ_grid_update_interval from config: {args.occ_grid_update_interval}")
-            
+    # Load NerfAcc parameters
+    nerfacc_config = config.get('nerfacc', {})
+    occ_grid_update_interval = nerfacc_config.get('occ_grid_update_interval', 16)
+    use_simple_occ = nerfacc_config.get('use_simple_occ', False)
+
     restart_every = config['training']['restart_every']
     batch_size = config['training']['batch_size']
     fid_every = config['training']['fid_every']
     save_best = config['training']['save_best']
     device = torch.device("cuda:0")
     
-    # 創建目錄
+    # Setup directories
     out_dir, checkpoint_dir = setup_directories(config)
     save_config(os.path.join(out_dir, 'config.yaml'), config)
-    
-    # 初始化 wandb
+
+    # Initialize wandb
     wandb.init(
         project=config['wandb']['project'],
         name=config['wandb']['name'],
         config=config
     )
 
-    # 初始化 model
+    # Initialize models
     train_loader, generator, discriminator = initialize_training(config, device)
 
-    # ========== 打印 NerfAcc 狀態 ==========
+    # Print NerfAcc status
     if hasattr(generator, 'use_nerfacc'):
         nerfacc_status = "Enabled" if generator.use_nerfacc else "Disabled"
         print(f"\n{'='*50}")
         print(f"[NerfAcc] Status: {nerfacc_status}")
         if generator.use_nerfacc:
-            print(f"[NerfAcc] Occ grid update interval: {args.occ_grid_update_interval}")
-            update_method = "Simple (sphere)" if args.use_simple_occ else "Network-based (accurate)"
+            print(f"[NerfAcc] Occ grid update interval: {occ_grid_update_interval}")
+            update_method = "Simple (sphere)" if use_simple_occ else "Network-based (accurate)"
             print(f"[NerfAcc] Occ grid update method: {update_method}")
         print(f"{'='*50}\n")
         wandb.config.update({
             'nerfacc_enabled': generator.use_nerfacc,
-            'occ_grid_update_interval': args.occ_grid_update_interval,
-            'use_simple_occ': args.use_simple_occ,
+            'occ_grid_update_interval': occ_grid_update_interval,
+            'use_simple_occ': use_simple_occ,
         })
 
     ccsr_nerf_loss = CCSRNeRFLoss().to(device)
@@ -136,7 +129,7 @@ def main():
         f.write('Generator Architecture:\n')
         f.write('-' * 50 + '\n')
         pprint.pprint(generator.module_dict, stream=f)
-        # ========== 記錄 NerfAcc 設定 ==========
+        # Record NerfAcc settings
         if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
             f.write('\n\nNerfAcc Configuration:\n')
             f.write('-' * 50 + '\n')
@@ -146,7 +139,7 @@ def main():
 
     wandb.save(file_path)
 
-    # 優化器
+    # Setup optimizers
     lr_g = config['training']['lr_g']
     lr_d = config['training']['lr_d']
     g_params = generator.parameters()
@@ -158,7 +151,7 @@ def main():
     hwfr = config['data']['hwfr']
     img_to_patch = ImgToPatch(generator.ray_sampler, hwfr[:3])
     
-    # 設置檢查點
+    # Setup checkpoints
     checkpoint_io = CheckpointIO(checkpoint_dir=checkpoint_dir)
     checkpoint_io.register_modules(
         discriminator=discriminator,
@@ -206,23 +199,14 @@ def main():
             generator.train()
             discriminator.train()
 
-            # ========== NerfAcc: 更新 Occupancy Grid ==========
+            # Update NerfAcc occupancy grid
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
-                if it % args.occ_grid_update_interval == 0:
-                    torch.cuda.synchronize()
-                    occ_start = time.time()
-
-                    if args.use_simple_occ:
-                        # 使用簡單球形估計更新（快速但不準確）
+                if it % occ_grid_update_interval == 0:
+                    if use_simple_occ:
                         generator.update_occupancy_grid(it)
                     else:
                         z_sample = zdist.sample((1,))
                         generator.update_occupancy_grid_with_network(it, label, z_sample)
-                    
-                    torch.cuda.synchronize()
-                    occ_time = (time.time() - occ_start) * 1000
-                    if it % (args.occ_grid_update_interval * 10) == 0:
-                        print(f"[NerfAcc] Occupancy grid updated in {occ_time:.1f} ms")
 
             # Discriminator updates
             d_optimizer.zero_grad()
@@ -265,7 +249,7 @@ def main():
             x_fake, _, ccsr_output = generator(z, label, return_ccsr_output=True)
             d_fake, label_fake = discriminator(x_fake, label)
 
-             # ========== NerfAcc 性能監控 ==========
+            # Monitor NerfAcc performance
             if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc and it % 100 == 0:
                 if hasattr(generator, 'last_render_extras') and generator.last_render_extras:
                     extras = generator.last_render_extras
@@ -299,9 +283,9 @@ def main():
                     "iteration": it
                 }
                 
-                # NerfAcc 統計
+                # Log NerfAcc statistics
                 if hasattr(generator, 'use_nerfacc') and generator.use_nerfacc:
-                    log_dict["nerfacc/occ_grid_step"] = it // args.occ_grid_update_interval
+                    log_dict["nerfacc/occ_grid_step"] = it // occ_grid_update_interval
                 
                 wandb.log(log_dict)
 

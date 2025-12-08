@@ -81,8 +81,8 @@ wandb:
   entity: vicky20020808
   name: RS307_test_acc
 nerfacc:
-  use_nerfacc: true        # 設為 false 可禁用 NerfAcc
-  resolution: 32         # Occupancy grid 解析度 (64, 128, 256)
-  render_step_size: 0.2  # null = 自動計算 (far-near)/N_samples
-  occ_grid_update_interval: 128  # 🔧 明確設定更新間隔（每 128 步更新，不是 16）
-  # render_step_size: 0.047  # 或手動指定: (4.5-1.5)/64 = 0.047
+  use_nerfacc: true
+  resolution: 32
+  render_step_size: 0.2
+  occ_grid_update_interval: 128
+  use_simple_occ: false
